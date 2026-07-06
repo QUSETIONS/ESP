@@ -54,6 +54,34 @@ def text(draw: ImageDraw.ImageDraw, xy, value: str, fnt=F12, fill=0) -> None:
     draw.text(xy, str(value), font=fnt, fill=fill)
 
 
+def wrap_text(draw: ImageDraw.ImageDraw, value: str, fnt, max_width: int, max_lines: int) -> list[str]:
+    lines: list[str] = []
+    current = ""
+    for char in str(value):
+        candidate = current + char
+        if draw.textlength(candidate, font=fnt) <= max_width or not current:
+            current = candidate
+            continue
+        lines.append(current)
+        current = char
+        if len(lines) >= max_lines:
+            break
+    if current and len(lines) < max_lines:
+        lines.append(current)
+    if len(lines) == max_lines and draw.textlength(lines[-1], font=fnt) > max_width:
+        while lines[-1] and draw.textlength(lines[-1] + "…", font=fnt) > max_width:
+            lines[-1] = lines[-1][:-1]
+        lines[-1] += "…"
+    return lines
+
+
+def multiline(draw: ImageDraw.ImageDraw, xy, value: str, fnt=F12, fill=0, max_width: int = 120,
+              max_lines: int = 2, line_gap: int = 4) -> None:
+    x, y = xy
+    for idx, line in enumerate(wrap_text(draw, value, fnt, max_width, max_lines)):
+        text(draw, (x, y + idx * (fnt.size + line_gap)), line, fnt, fill)
+
+
 def fit_text(value: str, limit: int) -> str:
     return value if len(value) <= limit else value[: max(0, limit - 1)] + "…"
 
@@ -104,11 +132,11 @@ def qr(payload: str, size: int) -> Image.Image:
 def qr_card(img: Image.Image, draw: ImageDraw.ImageDraw, xywh, title: str, subtitle: str, payload: str) -> None:
     x, y, w, h = xywh
     box(draw, (x, y, w, h))
-    draw.rectangle((x + 6, y + 6, x + w - 7, y + 32), fill=0)
-    text(draw, (x + 12, y + 9), title, F12, 255)
-    text(draw, (x + 8, y + 40), fit_text(subtitle, 13), F12)
-    q = qr(payload, min(w - 38, h - 66))
-    img.paste(q, (x + (w - q.width) // 2, y + h - q.height - 8))
+    draw.rectangle((x + 8, y + 8, x + w - 9, y + 34), fill=0)
+    text(draw, (x + 14, y + 11), title, F12, 255)
+    text(draw, (x + 10, y + 43), fit_text(subtitle, 13), F12)
+    q = qr(payload, min(w - 48, h - 74))
+    img.paste(q, (x + (w - q.width) // 2, y + h - q.height - 10))
 
 
 def agenda_items(data: dict[str, Any]) -> list[dict[str, str]]:
@@ -166,14 +194,14 @@ def render_agenda(data: dict[str, Any]) -> Image.Image:
     current = items[current_idx] if 0 <= current_idx < len(items) else (items[0] if items else {})
     header(draw, "会议议程", "1/4")
     band(draw, (10, 42, 380, 25), "当前议程")
-    box(draw, (10, 78, 380, 56))
-    draw.rectangle((20, 88, 76, 112), fill=0)
-    text(draw, (28, 93), current.get("time", "--:--"), F12, 255)
-    text(draw, (88, 87), fit_text(current.get("title", ""), 14), F16)
+    box(draw, (10, 78, 380, 74))
+    draw.rectangle((20, 90, 76, 114), fill=0)
+    text(draw, (28, 95), current.get("time", "--:--"), F12, 255)
+    multiline(draw, (88, 86), current.get("title", ""), F16, 0, 286, 2, 3)
     meta = " | ".join(part for part in (current.get("speaker", ""), current.get("note", "")) if part)
-    text(draw, (88, 112), fit_text(meta, 22), F12)
+    text(draw, (88, 130), fit_text(meta, 26), F12)
     for i, item in enumerate(items[current_idx + 1: current_idx + 6]):
-        time_row(draw, 22, 148 + i * 30, item.get("time", "--:--"), item.get("title", ""))
+        time_row(draw, 22, 166 + i * 28, item.get("time", "--:--"), item.get("title", ""))
     return img
 
 
@@ -183,8 +211,8 @@ def render_materials(data: dict[str, Any]) -> Image.Image:
     interaction = data.get("interaction", {})
     header(draw, "会议资料与互动", "2/4")
     band(draw, (10, 44, 380, 26), "资料和互动入口")
-    qr_card(img, draw, (12, 84, 180, 186), "资料下载", materials.get("label", "PPT / PDF"), materials.get("url", "https://msh.cn/m"))
-    qr_card(img, draw, (208, 84, 180, 186), "现场提问", interaction.get("label", "提交问题"), interaction.get("url", "https://msh.cn/q"))
+    qr_card(img, draw, (12, 82, 180, 194), "资料下载", materials.get("label", "PPT / PDF"), materials.get("url", "https://msh.cn/m"))
+    qr_card(img, draw, (208, 82, 180, 194), "现场提问", interaction.get("label", "提交问题"), interaction.get("url", "https://msh.cn/q"))
     return img
 
 
@@ -193,12 +221,17 @@ def render_summary(data: dict[str, Any]) -> Image.Image:
     summary = data.get("summary", {})
     header(draw, "AI 会议要点", "3/4")
     band(draw, (10, 44, 380, 25), summary.get("title", "09:35 AI 摘要"))
-    box(draw, (10, 82, 252, 184))
+    box(draw, (10, 82, 252, 194))
     text(draw, (20, 92), "核心要点", F16)
     draw.line((20, 120, 250, 120), fill=0)
-    for i, line in enumerate(summary.get("bullets", [])[:5]):
-        text(draw, (20, 132 + i * 22), fit_text(line, 18), F12)
-    box(draw, (276, 82, 112, 184))
+    y = 132
+    for line in summary.get("bullets", [])[:4]:
+        lines = wrap_text(draw, line, F12, 224, 2)
+        for wrapped in lines:
+            text(draw, (20, y), wrapped, F12)
+            y += 17
+        y += 4
+    box(draw, (276, 82, 112, 194))
     band(draw, (284, 90, 94, 25), "关键词")
     text(draw, (284, 130), "\n".join(summary.get("keywords", [])[:5]), F12)
     return img
@@ -210,16 +243,66 @@ def render_reminder(data: dict[str, Any]) -> Image.Image:
     reminder = data.get("reminder", {})
     header(draw, "个人提醒", "4/4")
     band(draw, (10, 44, 214, 28), user.get("name", "参会者"))
-    box(draw, (10, 86, 214, 158))
+    box(draw, (10, 86, 214, 174))
     for i, item in enumerate(reminder.get("items", [])[:3]):
         y = 98 + i * 48
         draw.rectangle((22, y, 76, y + 24), fill=0)
         text(draw, (29, y + 5), item.get("time", "--:--"), F12, 255)
-        text(draw, (88, y + 4), fit_text(item.get("title", ""), 8), F15)
+        multiline(draw, (88, y + 2), item.get("title", ""), F15, 0, 122, 2, 2)
         if i < 2:
             draw.line((22, y + 38, 210, y + 38), fill=0)
-    qr_card(img, draw, (242, 72, 146, 194), "提醒设置", "扫码修改", reminder.get("url", "https://msh.cn/r"))
+    qr_card(img, draw, (242, 72, 146, 204), "提醒设置", "扫码修改", reminder.get("url", "https://msh.cn/r"))
     return img
+
+
+def render_pages(data: dict[str, Any], out: Path) -> list[Path]:
+    out.mkdir(parents=True, exist_ok=True)
+    pages = {
+        "01_home.png": render_home(data),
+        "02_lab.png": render_lab(data),
+        "03_meeting_agenda.png": render_agenda(data),
+        "04_meeting_materials.png": render_materials(data),
+        "05_meeting_summary.png": render_summary(data),
+        "06_meeting_reminder.png": render_reminder(data),
+    }
+    paths: list[Path] = []
+    for name, img in pages.items():
+        path = out / name
+        img.save(path)
+        paths.append(path)
+    return paths
+
+
+def check_layout(paths: list[Path]) -> list[str]:
+    warnings: list[str] = []
+    for path in paths:
+        img = Image.open(path).convert("1")
+        if img.size != (W, H):
+            warnings.append(f"{path.name}: expected {W}x{H}, got {img.width}x{img.height}")
+            continue
+
+        # Catch accidental drawing outside the intended e-paper safe area.
+        border_pixels = 0
+        for x in range(W):
+            border_pixels += img.getpixel((x, 0)) == 0
+            border_pixels += img.getpixel((x, H - 1)) == 0
+        for y in range(H):
+            border_pixels += img.getpixel((0, y)) == 0
+            border_pixels += img.getpixel((W - 1, y)) == 0
+        if border_pixels > W + H:
+            warnings.append(f"{path.name}: excessive black pixels on outer edge")
+
+        # QR pages need a quiet white margin around the cards, or phone scanning gets flaky.
+        if "materials" in path.name or "reminder" in path.name:
+            quiet_samples = [
+                img.getpixel((8, 78)),
+                img.getpixel((198, 78)),
+                img.getpixel((232, 38)),
+                img.getpixel((392, 38)),
+            ]
+            if any(pixel == 0 for pixel in quiet_samples):
+                warnings.append(f"{path.name}: QR quiet-zone guard samples are not white")
+    return warnings
 
 
 def verify_qr(paths: list[Path]) -> None:
@@ -238,26 +321,21 @@ def main() -> int:
     parser.add_argument("--data", type=Path, default=DEFAULT_DATA)
     parser.add_argument("--out", type=Path, default=OUT)
     parser.add_argument("--verify-qr", action="store_true")
+    parser.add_argument("--check-layout", action="store_true")
     args = parser.parse_args()
 
     data = load_data(args.data)
-    args.out.mkdir(parents=True, exist_ok=True)
-    pages = {
-        "01_home.png": render_home(data),
-        "02_lab.png": render_lab(data),
-        "03_meeting_agenda.png": render_agenda(data),
-        "04_meeting_materials.png": render_materials(data),
-        "05_meeting_summary.png": render_summary(data),
-        "06_meeting_reminder.png": render_reminder(data),
-    }
-    paths: list[Path] = []
-    for name, img in pages.items():
-        path = args.out / name
-        img.save(path)
-        paths.append(path)
+    paths = render_pages(data, args.out)
+    for path in paths:
         print(path)
     if args.verify_qr:
         verify_qr(paths)
+    if args.check_layout:
+        warnings = check_layout(paths)
+        for warning in warnings:
+            print(f"layout: {warning}")
+        if warnings:
+            return 1
     return 0
 
 

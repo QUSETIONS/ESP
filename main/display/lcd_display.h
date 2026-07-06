@@ -74,6 +74,7 @@ public:
     void MeetingAssistantScrollUp();
     void MeetingAssistantScrollDown();
     void SetMeetingData(const MeetingData& data);
+    void SetClockLabels(const std::string& home_date, const std::string& meeting_time);
     FactoryTestPageAdapter* GetFactoryTestPageAdapter() { return factory_test_page_adapter_; }
     StickyNoteHomePageAdapter* GetStickyNoteHomePageAdapter() { return sticky_note_home_page_adapter_; }
     LabFeaturesPageAdapter* GetLabFeaturesPageAdapter() { return lab_features_page_adapter_; }

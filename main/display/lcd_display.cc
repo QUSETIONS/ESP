@@ -277,6 +277,16 @@ void LcdDisplay::SetMeetingData(const MeetingData& data) {
     }
 }
 
+void LcdDisplay::SetClockLabels(const std::string& home_date, const std::string& meeting_time) {
+    DisplayLockGuard lock(this);
+    if (sticky_note_home_page_adapter_ != nullptr) {
+        sticky_note_home_page_adapter_->SetDateLabel(home_date);
+    }
+    if (meeting_assistant_page_adapter_ != nullptr) {
+        meeting_assistant_page_adapter_->SetTimeLabel(meeting_time);
+    }
+}
+
 void LcdDisplay::SetupUI() {
     if (ui_setup_done_) {
         return;

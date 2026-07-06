@@ -24,6 +24,7 @@ public:
     void ScrollUp();
     void ScrollDown();
     void SetMeetingData(const MeetingData& data);
+    void SetTimeLabel(const std::string& value);
 
 private:
     void UpdateContent();
@@ -36,6 +37,7 @@ private:
     bool built_ = false;
     size_t page_index_ = 0;
     MeetingData meeting_data_;
+    std::string time_label_text_ = "09:35";
 
     lv_obj_t* screen_ = nullptr;
     lv_obj_t* content_ = nullptr;

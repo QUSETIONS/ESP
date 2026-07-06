@@ -26,6 +26,7 @@ public:
     void MoveDown();
     Action Confirm();
     void SetNetworkHint(const std::string& title, const std::string& detail, const std::string& hint);
+    void SetDateLabel(const std::string& value);
 
 private:
     void UpdateContent();
@@ -35,6 +36,7 @@ private:
 
     bool built_ = false;
     int selected_index_ = 0;
+    std::string date_label_ = "07/05 周日";
     lv_obj_t* screen_ = nullptr;
     lv_obj_t* time_label_ = nullptr;
     std::string network_title_ = "离线";

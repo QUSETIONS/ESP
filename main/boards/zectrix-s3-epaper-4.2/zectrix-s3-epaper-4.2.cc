@@ -4,12 +4,16 @@
 #include <esp_adc/adc_cali_scheme.h>
 #include <esp_adc/adc_oneshot.h>
 #include <esp_log.h>
+#include <esp_sntp.h>
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include <cstdio>
+#include <ctime>
 #include <memory>
 #include <string>
+#include <sys/time.h>
 
 #include "FT/factory_test_service.h"
 #include "application.h"
@@ -36,6 +40,7 @@ namespace {
 
 constexpr char kTag[] = "ZectrixFtBoard";
 constexpr uint16_t kNavLongPressMs = 1000;
+constexpr time_t kValidUnixTimeThreshold = 1704067200;  // 2024-01-01 00:00:00 UTC
 
 enum class BoardUiMode : uint8_t {
     StickyNote = 0,
@@ -237,7 +242,9 @@ private:
         rtc_ = std::make_unique<RtcPcf8563>(i2c_bus_, RTC_I2C_ADDR);
         if (!rtc_->Init(RTC_INT_GPIO)) {
             ESP_LOGW(kTag, "RTC init failed");
+            return;
         }
+        TryLoadSystemTimeFromRtc();
     }
 
     void InitializeNfc() {
@@ -278,6 +285,7 @@ private:
                                         DISPLAY_SWAP_XY,
                                         lcd_spi_data);
         display_->SetMeetingData(MakeDefaultMeetingData());
+        RefreshClockLabels();
     }
 
     void HandleWifiEvent(WifiEvent event) {
@@ -293,6 +301,9 @@ private:
                 ESP_LOGI(kTag, "Wi-Fi connected: ssid=%s ip=%s",
                          wifi.GetSsid().c_str(),
                          wifi.GetIpAddress().c_str());
+                StartSntpIfNeeded();
+                TrySyncRtcFromSystemTime();
+                RefreshClockLabels();
                 if (display_ != nullptr) {
                     display_->SetStickyNoteNetworkHint("在线", wifi.GetSsid(), wifi.GetIpAddress());
                     if (display_->IsStickyNoteHomePageActive()) {
@@ -322,6 +333,117 @@ private:
                 NotifyNetworkEvent(NetworkEvent::WifiConfigModeExit, "");
                 break;
         }
+    }
+
+    static bool IsValidLocalTime(const tm& value) {
+        return value.tm_year >= 124 &&
+               value.tm_mon >= 0 && value.tm_mon <= 11 &&
+               value.tm_mday >= 1 && value.tm_mday <= 31 &&
+               value.tm_hour >= 0 && value.tm_hour <= 23 &&
+               value.tm_min >= 0 && value.tm_min <= 59 &&
+               value.tm_sec >= 0 && value.tm_sec <= 60;
+    }
+
+    static bool GetSystemLocalTime(tm& out_local_tm) {
+        const time_t now = time(nullptr);
+        if (now < kValidUnixTimeThreshold) {
+            return false;
+        }
+        return localtime_r(&now, &out_local_tm) != nullptr && IsValidLocalTime(out_local_tm);
+    }
+
+    bool TryLoadSystemTimeFromRtc() {
+        if (!rtc_) {
+            return false;
+        }
+
+        tm rtc_tm = {};
+        if (!rtc_->GetTime(rtc_tm) || !IsValidLocalTime(rtc_tm)) {
+            ESP_LOGW(kTag, "RTC time invalid");
+            return false;
+        }
+
+        const time_t rtc_time = mktime(&rtc_tm);
+        if (rtc_time < kValidUnixTimeThreshold) {
+            ESP_LOGW(kTag, "RTC time before valid threshold");
+            return false;
+        }
+
+        timeval tv = {
+            .tv_sec = rtc_time,
+            .tv_usec = 0,
+        };
+        if (settimeofday(&tv, nullptr) != 0) {
+            ESP_LOGW(kTag, "Failed to set system time from RTC");
+            return false;
+        }
+
+        ESP_LOGI(kTag, "System time loaded from RTC");
+        return true;
+    }
+
+    void StartSntpIfNeeded() {
+        if (sntp_started_ || esp_sntp_enabled()) {
+            sntp_started_ = true;
+            return;
+        }
+
+        esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
+        esp_sntp_setservername(0, "pool.ntp.org");
+        esp_sntp_setservername(1, "ntp.aliyun.com");
+        esp_sntp_init();
+        sntp_started_ = true;
+        ESP_LOGI(kTag, "SNTP started");
+    }
+
+    bool TrySyncRtcFromSystemTime() {
+        if (!rtc_) {
+            return false;
+        }
+
+        tm local_tm = {};
+        if (!GetSystemLocalTime(local_tm)) {
+            return false;
+        }
+
+        const bool ok = rtc_->SetTime(local_tm);
+        if (ok) {
+            ESP_LOGI(kTag, "RTC synced from system time");
+        }
+        return ok;
+    }
+
+    void RefreshClockLabels() {
+        if (display_ == nullptr) {
+            return;
+        }
+
+        tm local_tm = {};
+        if (!GetSystemLocalTime(local_tm)) {
+            if (rtc_ == nullptr || !rtc_->GetTime(local_tm) || !IsValidLocalTime(local_tm)) {
+                display_->SetClockLabels("--/-- --", "--:--");
+                return;
+            }
+        }
+
+        char home_buf[32] = {};
+        char meeting_buf[8] = {};
+        strftime(home_buf, sizeof(home_buf), "%m/%d", &local_tm);
+        strftime(meeting_buf, sizeof(meeting_buf), "%H:%M", &local_tm);
+
+        static constexpr const char* kWeekdays[] = {
+            "周日",
+            "周一",
+            "周二",
+            "周三",
+            "周四",
+            "周五",
+            "周六",
+        };
+        const int weekday = (local_tm.tm_wday >= 0 && local_tm.tm_wday <= 6) ? local_tm.tm_wday : 0;
+        std::string home_label = std::string(home_buf) + " " + kWeekdays[weekday];
+        snprintf(home_buf, sizeof(home_buf), "%s", home_label.c_str());
+        display_->SetClockLabels(home_buf, meeting_buf);
     }
 
     void NotifyNetworkEvent(NetworkEvent event, const std::string& data) {
@@ -589,6 +711,7 @@ private:
     ChargeStatus charge_status_;
     NetworkEventCallback network_event_callback_;
     bool network_started_ = false;
+    bool sntp_started_ = false;
     TaskHandle_t meeting_fetch_task_ = nullptr;
     BoardUiMode ui_mode_ = BoardUiMode::StickyNote;
     Button up_button_;

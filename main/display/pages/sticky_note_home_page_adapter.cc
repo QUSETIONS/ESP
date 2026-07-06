@@ -156,7 +156,7 @@ void StickyNoteHomePageAdapter::BuildHome() {
     time_label_ = lv_label_create(header);
     SetFont(time_label_, &BUILTIN_TEXT_FONT);
     lv_obj_set_style_text_color(time_label_, lv_color_white(), 0);
-    lv_label_set_text(time_label_, "07/05 周日");
+    lv_label_set_text(time_label_, date_label_.c_str());
     lv_obj_align(time_label_, LV_ALIGN_RIGHT_MID, -12, 0);
 
     lv_obj_t* todos = MakeBox(screen_, 12, 44, 250, 164, 8);
@@ -226,6 +226,13 @@ void StickyNoteHomePageAdapter::SetNetworkHint(const std::string& title,
     UpdateNetworkHint();
 }
 
+void StickyNoteHomePageAdapter::SetDateLabel(const std::string& value) {
+    date_label_ = value;
+    if (built_ && time_label_ != nullptr) {
+        lv_label_set_text(time_label_, date_label_.c_str());
+    }
+}
+
 void StickyNoteHomePageAdapter::UpdateNetworkHint() {
     if (!built_) {
         return;
@@ -246,7 +253,7 @@ void StickyNoteHomePageAdapter::UpdateContent() {
         return;
     }
     if (time_label_ != nullptr) {
-        lv_label_set_text(time_label_, "07/05 周日");
+        lv_label_set_text(time_label_, date_label_.c_str());
     }
     UpdateNetworkHint();
     for (int i = 0; i < kMenuCount; ++i) {
