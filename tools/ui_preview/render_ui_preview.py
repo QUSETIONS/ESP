@@ -191,27 +191,51 @@ def render_home(data: dict[str, Any]) -> Image.Image:
     img, draw = canvas()
     home = data.get("home", {})
     status = data.get("device_status", {})
-    header(draw, home.get("title", "极趣实验室 Note"), home.get("date_label", "07/05 周日"))
-    box(draw, (12, 44, 250, 164))
-    band(draw, (20, 52, 232, 25), "今日待办")
-    for idx, item in enumerate(agenda_items(data)[:4]):
-        time_row(draw, 20, 82 + idx * 30, item.get("time", "--:--"), item.get("title", ""), idx == data.get("current_agenda_index", 0))
-
-    box(draw, (274, 44, 114, 72))
-    text(draw, (282, 52), home.get("month", "JUL"), F12)
-    text(draw, (282, 70), home.get("day", "05"), F20)
-    text(draw, (340, 88), home.get("weekday", "周日"), F15)
-
-    box(draw, (274, 128, 114, 80))
-    text(draw, (282, 136), status.get("network", "离线"), F15)
-    text(draw, (340, 136), status.get("mode", "本地"), F15)
-    draw.line((282, 164, 378, 164), fill=0)
-    text(draw, (282, 178), "NFC", F12)
-    text(draw, (340, 178), status.get("nfc", "Ready"), F12)
-
-    selected_row(draw, (12, 222, 376, 30), "便利贴", "今日待办", True)
-    selected_row(draw, (12, 258, 376, 30), "实验室", "会议助手", False)
+    header(draw, "NOTE DESK", home.get("date_label", "07/05 周日"))
+    home_command_desk(draw, data, status)
     return img
+
+
+def home_command_desk(draw: ImageDraw.ImageDraw, data: dict[str, Any], status: dict[str, Any]) -> None:
+    items = agenda_items(data)
+    current_idx = int(data.get("current_agenda_index", 0))
+    current = items[current_idx] if 0 <= current_idx < len(items) else (items[0] if items else {})
+    next_item = items[current_idx + 1] if current_idx + 1 < len(items) else {}
+    home_hero_card(draw, current)
+    device_status_panel(draw, data.get("home", {}), status)
+    next_title = next_item.get("title", "暂无后续待办")
+    next_time = next_item.get("time", "--:--")
+    box(draw, (12, 158, 376, 46))
+    text(draw, (24, 168), "下一个", F12)
+    text(draw, (82, 166), f"{next_time}  {fit_text(next_title, 16)}", F15)
+    home_action_card(draw, (12, 220, 182, 62), "便利贴", "今日待办", True)
+    home_action_card(draw, (206, 220, 182, 62), "实验室", "会议助手", False)
+
+
+def home_hero_card(draw: ImageDraw.ImageDraw, item: dict[str, str]) -> None:
+    box(draw, (12, 44, 236, 98), fill=0)
+    text(draw, (24, 54), "当前待办", F12, 255)
+    text(draw, (24, 82), item.get("time", "--:--"), F20, 255)
+    multiline(draw, (104, 78), item.get("title", ""), F16, 255, 116, 2, 3)
+    text(draw, (24, 122), "确认保留在便利贴模式", F10, 255)
+
+
+def device_status_panel(draw: ImageDraw.ImageDraw, home: dict[str, Any], status: dict[str, Any]) -> None:
+    box(draw, (260, 44, 128, 98))
+    text(draw, (272, 54), home.get("month", "JUL"), F12)
+    text(draw, (272, 76), home.get("day", "05"), F20)
+    text(draw, (334, 84), home.get("weekday", "周日"), F15)
+    draw.line((272, 112, 376, 112), fill=0)
+    text(draw, (272, 122), fit_text(status.get("network", "离线"), 4), F12)
+    text(draw, (330, 122), fit_text(status.get("nfc", "Ready"), 5), F12)
+
+
+def home_action_card(draw: ImageDraw.ImageDraw, xywh, title: str, subtitle: str, selected: bool) -> None:
+    x, y, w, h = xywh
+    box(draw, (x, y, w, h), fill=0 if selected else 255)
+    fill = 255 if selected else 0
+    text(draw, (x + 12, y + 10), title, F16, fill)
+    text(draw, (x + 12, y + 36), subtitle, F12, fill)
 
 
 def render_lab(data: dict[str, Any]) -> Image.Image:
@@ -222,76 +246,56 @@ def render_lab(data: dict[str, Any]) -> Image.Image:
 
 
 def lab_console(draw: ImageDraw.ImageDraw, data: dict[str, Any]) -> None:
-    status_pill(draw, (12, 44, 96, 22), "CLIENT DEMO", True)
-    text(draw, (120, 43), "LAB CONSOLE", F18)
-    status_pill(draw, (300, 44, 88, 22), "LOCAL RTC")
     rows = data.get("lab_features", [])
     if rows:
-        hero_feature_card(draw, rows[0], True)
-    tile_positions = [(12, 174), (140, 174), (268, 174)]
-    for i, row in enumerate(rows[1:4]):
-        capability_tile(draw, row, i + 2, tile_positions[i], False)
-    demo_status_bar(draw)
+        lab_hero_card(draw, rows[0], True)
+    capability_tile(draw, rows[1] if len(rows) > 1 else {}, 2, (12, 160), False)
+    capability_tile(draw, rows[2] if len(rows) > 2 else {}, 3, (206, 160), False)
+    box(draw, (12, 240, 376, 42), fill=0)
+    text(draw, (24, 252), "设备状态", F12, 255)
+    text(draw, (112, 252), "RTC / NFC / 网络", F12, 255)
 
 
-def hero_feature_card(draw: ImageDraw.ImageDraw, row: dict[str, str], selected: bool) -> None:
-    x, y, w, h = 12, 78, 376, 82
+def lab_hero_card(draw: ImageDraw.ImageDraw, row: dict[str, str], selected: bool) -> None:
+    x, y, w, h = 12, 54, 376, 88
     box(draw, (x, y, w, h), fill=0 if selected else 255)
     fill = 255 if selected else 0
-    text(draw, (x + 12, y + 9), "OPEN", F12, fill)
-    text(draw, (x + 86, y + 8), row.get("title", "会议助手"), F18, fill)
-    text(draw, (x + 86, y + 38), fit_text(row.get("subtitle", ""), 26), F12, fill)
-    status_pill(draw, (x + 286, y + 10, 72, 22), "确认进入")
-    status_pill(draw, (x + 286, y + 42, 72, 22), "AI + QR")
+    text(draw, (x + 16, y + 12), row.get("title", "会议助手"), F18, fill)
+    multiline(draw, (x + 16, y + 44), row.get("subtitle", ""), F12, fill, 220, 2, 2)
+    text(draw, (x + 284, y + 18), "确认进入", F12, fill)
+    text(draw, (x + 284, y + 46), "AI / QR", F12, fill)
 
 
 def capability_tile(draw: ImageDraw.ImageDraw, row: dict[str, str], number: int, xy, selected: bool) -> None:
     x, y = xy
-    box(draw, (x, y, 120, 68), fill=0 if selected else 255)
+    box(draw, (x, y, 182, 64), fill=0 if selected else 255)
     fill = 255 if selected else 0
-    text(draw, (x + 8, y + 7), f"{number:02d}", F12, fill)
-    text(draw, (x + 8, y + 26), fit_text(row.get("title", ""), 8), F15, fill)
-    text(draw, (x + 8, y + 48), fit_text(row.get("subtitle", ""), 10), F10, fill)
-
-
-def demo_status_bar(draw: ImageDraw.ImageDraw) -> None:
-    draw.rectangle((12, 256, 388, 288), fill=0)
-    text(draw, (22, 263), "DEMO READY", F12, 255)
-    text(draw, (130, 263), "会议助手 / 资料 / 提醒 / 状态", F12, 255)
+    text(draw, (x + 12, y + 10), row.get("title", ""), F15, fill)
+    text(draw, (x + 12, y + 36), fit_text(row.get("subtitle", ""), 14), F12, fill)
 
 
 def render_agenda(data: dict[str, Any]) -> Image.Image:
     img, draw = canvas()
-    current_idx = int(data.get("current_agenda_index", 0))
-    items = agenda_items(data)
-    current = items[current_idx] if 0 <= current_idx < len(items) else (items[0] if items else {})
     header(draw, "GoTim ink", "1/4")
-    agenda_board(img, draw, data)
+    clean_agenda_page(draw, data)
     return img
 
 
-def agenda_board(img: Image.Image, draw: ImageDraw.ImageDraw, data: dict[str, Any]) -> None:
+def clean_agenda_page(draw: ImageDraw.ImageDraw, data: dict[str, Any]) -> None:
     current_idx = int(data.get("current_agenda_index", 0))
     items = agenda_items(data)
     current = items[current_idx] if 0 <= current_idx < len(items) else (items[0] if items else {})
-    console_header(draw, "LIVE", "EXEC CONSOLE", current.get("time", "--:--"))
-    hero_agenda_panel(draw, current)
-    status_pill(draw, (12, 202, 68, 22), "NEXT UP", True)
-    text(draw, (92, 205), "接下来的议程", F12)
-    draw.line((10, 232, 390, 232), fill=0)
-    for i, item in enumerate(items[current_idx + 1: current_idx + 3]):
-        time_row(draw, 22, 246 + i * 28, item.get("time", "--:--"), item.get("title", ""))
-
-
-def hero_agenda_panel(draw: ImageDraw.ImageDraw, current: dict[str, str]) -> None:
-    box(draw, (10, 86, 380, 104))
-    signal_rail(draw, 20, 96, 76, True)
-    clock_block(draw, 36, 98, 66, current.get("time", "--:--"))
-    text(draw, (126, 94), "CURRENT SESSION", F10)
-    multiline(draw, (126, 116), current.get("title", ""), F16, 0, 238, 2, 3)
+    next_item = items[current_idx + 1] if current_idx + 1 < len(items) else {}
+    box(draw, (12, 48, 376, 112), fill=0)
+    text(draw, (24, 60), "当前议程", F12, 255)
+    text(draw, (24, 88), current.get("time", "--:--"), F20, 255)
+    multiline(draw, (116, 84), current.get("title", ""), F16, 255, 220, 2, 3)
     meta = " | ".join(part for part in (current.get("speaker", ""), current.get("note", "")) if part)
-    draw.line((126, 164, 374, 164), fill=0)
-    text(draw, (126, 171), fit_text(meta, 24), F12)
+    text(draw, (24, 136), fit_text(meta, 28), F12, 255)
+    box(draw, (12, 176, 376, 54))
+    text(draw, (24, 188), "下一个", F12)
+    text(draw, (94, 188), f"{next_item.get('time', '--:--')}  {fit_text(next_item.get('title', '暂无'), 15)}", F15)
+    text(draw, (24, 250), "向下滚动查看更多议程", F12)
 
 
 def render_materials(data: dict[str, Any]) -> Image.Image:
@@ -299,35 +303,37 @@ def render_materials(data: dict[str, Any]) -> Image.Image:
     materials = data.get("materials", {})
     interaction = data.get("interaction", {})
     header(draw, "GoTim ink", "2/4")
-    console_header(draw, "SCAN", "SCAN DESK", "2 CODES")
-    primary_qr_panel(img, draw, (12, 86, 214, 186), "资料下载", materials.get("label", "PPT / PDF"), materials.get("url", "https://msh.cn/m"))
-    kiosk_qr_card(img, draw, (244, 106, 144, 146), "现场提问", interaction.get("label", "提交问题"), interaction.get("url", "https://msh.cn/q"))
-    text(draw, (18, 280), "主入口下载材料，右侧入口提交现场问题", F12)
+    clean_materials_page(img, draw, materials, interaction)
     return img
+
+
+def clean_materials_page(img: Image.Image, draw: ImageDraw.ImageDraw, materials: dict[str, Any], interaction: dict[str, Any]) -> None:
+    primary_qr_panel(img, draw, (12, 48, 210, 210), "资料下载", materials.get("label", "PPT / PDF"), materials.get("url", "https://msh.cn/m"))
+    kiosk_qr_card(img, draw, (242, 72, 146, 162), "现场提问", interaction.get("label", "提交问题"), interaction.get("url", "https://msh.cn/q"))
+    text(draw, (18, 276), "左侧下载材料，右侧提交问题", F12)
 
 
 def render_summary(data: dict[str, Any]) -> Image.Image:
     img, draw = canvas()
     summary = data.get("summary", {})
     header(draw, "GoTim ink", "3/4")
-    console_header(draw, "AI", "AI CONSOLE", "SCROLL")
-    status_pill(draw, (10, 84, 252, 22), summary.get("title", "09:35 AI 摘要"))
-    box(draw, (10, 116, 252, 174))
-    text(draw, (20, 126), "核心要点", F16)
-    draw.line((20, 154, 250, 154), fill=0)
-    y = 166
-    for line in summary.get("bullets", [])[:4]:
-        lines = wrap_text(draw, line, F12, 224, 2)
-        for wrapped in lines:
-            text(draw, (20, y), wrapped, F12)
-            y += 17
-        y += 4
-    box(draw, (276, 84, 112, 206))
-    band(draw, (284, 92, 94, 25), "关键词")
-    keyword_strip(draw, list(summary.get("keywords", [])), 284, 132)
-    draw.line((284, 238, 378, 238), fill=0)
-    text(draw, (284, 250), "行动项\n确认预算", F12)
+    clean_insight_page(draw, summary)
     return img
+
+
+def clean_insight_page(draw: ImageDraw.ImageDraw, summary: dict[str, Any]) -> None:
+    box(draw, (12, 48, 376, 164))
+    text(draw, (24, 60), summary.get("title", "AI 摘要"), F12)
+    draw.line((24, 88, 376, 88), fill=0)
+    y = 100
+    for line in summary.get("bullets", [])[:4]:
+        lines = wrap_text(draw, line, F12, 330, 1)
+        for wrapped in lines:
+            text(draw, (24, y), wrapped, F12)
+            y += 17
+    box(draw, (12, 228, 376, 46), fill=0)
+    text(draw, (24, 240), "关键词", F12, 255)
+    text(draw, (98, 240), " / ".join(summary.get("keywords", [])[:3]), F12, 255)
 
 
 def render_reminder(data: dict[str, Any]) -> Image.Image:
@@ -335,24 +341,25 @@ def render_reminder(data: dict[str, Any]) -> Image.Image:
     user = data.get("attendee", {})
     reminder = data.get("reminder", {})
     header(draw, "GoTim ink", "4/4")
-    console_header(draw, "ALERT", "ALERT DESK", "AUTO")
-    status_pill(draw, (10, 84, 214, 22), f"{user.get('name', '参会者')} / 个人提醒")
-    box(draw, (10, 116, 214, 150))
-    active_index = int(data.get("active_reminder_index", -1))
+    clean_reminder_page(img, draw, user, reminder, int(data.get("active_reminder_index", -1)))
+    return img
+
+
+def clean_reminder_page(img: Image.Image, draw: ImageDraw.ImageDraw, user: dict[str, Any], reminder: dict[str, Any], active_index: int) -> None:
+    box(draw, (12, 48, 220, 176))
+    text(draw, (24, 60), f"{user.get('name', '参会者')} 的提醒", F12)
+    draw.line((24, 86, 218, 86), fill=0)
     for i, item in enumerate(reminder.get("items", [])[:3]):
-        y = 126 + i * 42
+        y = 100 + i * 36
         draw.rectangle((22, y, 76, y + 24), fill=0)
         text(draw, (29, y + 5), item.get("time", "--:--"), F12, 255)
         if i == active_index:
-            draw.rectangle((84, y - 2, 212, y + 34), fill=0)
-            multiline(draw, (90, y + 2), item.get("title", ""), F15, 255, 116, 2, 2)
+            draw.rectangle((84, y - 2, 218, y + 28), fill=0)
+            text(draw, (92, y + 4), fit_text(item.get("title", ""), 8), F15, 255)
         else:
-            multiline(draw, (88, y + 2), item.get("title", ""), F15, 0, 122, 2, 2)
-        if i < 2:
-            draw.line((22, y + 36, 210, y + 36), fill=0)
-    kiosk_qr_card(img, draw, (242, 106, 146, 184), "提醒设置", "扫码修改", reminder.get("url", "https://msh.cn/r"))
+            text(draw, (92, y + 4), fit_text(item.get("title", ""), 8), F15)
+    kiosk_qr_card(img, draw, (250, 68, 138, 166), "提醒设置", "扫码修改", reminder.get("url", "https://msh.cn/r"))
     text(draw, (18, 276), "到点自动高亮，可滚动查看更多", F12)
-    return img
 
 
 def render_pages(data: dict[str, Any], out: Path) -> list[Path]:
@@ -393,11 +400,20 @@ def check_layout(paths: list[Path]) -> list[str]:
             warnings.append(f"{path.name}: excessive black pixels on outer edge")
 
         # QR pages need a quiet white margin around the cards, or phone scanning gets flaky.
-        if "materials" in path.name or "reminder" in path.name:
+        if "materials" in path.name:
             quiet_samples = [
                 img.getpixel((8, 78)),
-                img.getpixel((198, 78)),
+                img.getpixel((232, 78)),
                 img.getpixel((232, 38)),
+                img.getpixel((392, 38)),
+            ]
+            if any(pixel == 0 for pixel in quiet_samples):
+                warnings.append(f"{path.name}: QR quiet-zone guard samples are not white")
+        if "reminder" in path.name:
+            quiet_samples = [
+                img.getpixel((8, 78)),
+                img.getpixel((238, 78)),
+                img.getpixel((238, 38)),
                 img.getpixel((392, 38)),
             ]
             if any(pixel == 0 for pixel in quiet_samples):

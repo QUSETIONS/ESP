@@ -65,21 +65,6 @@ lv_obj_t* MakeBox(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv
     return box;
 }
 
-void MakeBand(lv_obj_t* parent, const char* text, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h) {
-    lv_obj_t* band = lv_obj_create(parent);
-    StyleFilled(band);
-    lv_obj_set_size(band, w, h);
-    lv_obj_align(band, LV_ALIGN_TOP_LEFT, x, y);
-
-    lv_obj_t* label = lv_label_create(band);
-    SetFont(label, &SourceHanSansSC_Medium_slim);
-    lv_obj_set_style_text_color(label, lv_color_white(), 0);
-    lv_obj_set_width(label, w - 12);
-    lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
-    lv_label_set_text(label, text);
-    lv_obj_align(label, LV_ALIGN_LEFT_MID, 6, 0);
-}
-
 void MakeRule(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t w) {
     lv_obj_t* rule = lv_obj_create(parent);
     StyleFilled(rule);
@@ -87,23 +72,21 @@ void MakeRule(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t w) {
     lv_obj_align(rule, LV_ALIGN_TOP_LEFT, x, y);
 }
 
-void MakeTimeRow(lv_obj_t* parent, const char* time, const char* text, lv_coord_t y, bool active) {
-    lv_obj_t* tag = lv_obj_create(parent);
-    if (active) {
-        StyleFilled(tag);
-    } else {
-        StyleBox(tag, 0);
-    }
-    lv_obj_set_size(tag, 50, 22);
-    lv_obj_align(tag, LV_ALIGN_TOP_LEFT, 0, y);
+void MakeHomeHeroCard(lv_obj_t* parent) {
+    lv_obj_t* card = lv_obj_create(parent);
+    StyleFilled(card, 8);
+    lv_obj_set_size(card, 236, 98);
+    lv_obj_align(card, LV_ALIGN_TOP_LEFT, 12, 44);
 
-    lv_obj_t* time_label = lv_label_create(tag);
-    SetFont(time_label, &BUILTIN_TEXT_FONT);
-    lv_obj_set_style_text_color(time_label, active ? lv_color_white() : lv_color_black(), 0);
-    lv_label_set_text(time_label, time);
-    lv_obj_center(time_label);
-
-    MakeLabel(parent, text, 62, y + 1, 160, &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
+    lv_obj_t* label = MakeLabel(card, "当前待办", 4, 2, 190, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    lv_obj_set_style_text_color(label, lv_color_white(), 0);
+    lv_obj_t* time = MakeLabel(card, "09:30", 4, 30, 70, &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
+    lv_obj_set_style_text_color(time, lv_color_white(), 0);
+    lv_obj_t* title = MakeLabel(card, "理事会工作报告", 88, 28, 120, &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_WRAP);
+    lv_obj_set_height(title, 42);
+    lv_obj_set_style_text_color(title, lv_color_white(), 0);
+    lv_obj_t* hint = MakeLabel(card, "确认保留在便利贴模式", 4, 74, 198, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    lv_obj_set_style_text_color(hint, lv_color_white(), 0);
 }
 
 }  // namespace
@@ -150,7 +133,7 @@ void StickyNoteHomePageAdapter::BuildHome() {
     lv_obj_t* title = lv_label_create(header);
     SetFont(title, &SourceHanSansSC_Medium_slim);
     lv_obj_set_style_text_color(title, lv_color_white(), 0);
-    lv_label_set_text(title, "极趣实验室 Note");
+    lv_label_set_text(title, "NOTE DESK");
     lv_obj_align(title, LV_ALIGN_LEFT_MID, 12, 0);
 
     time_label_ = lv_label_create(header);
@@ -159,36 +142,37 @@ void StickyNoteHomePageAdapter::BuildHome() {
     lv_label_set_text(time_label_, date_label_.c_str());
     lv_obj_align(time_label_, LV_ALIGN_RIGHT_MID, -12, 0);
 
-    lv_obj_t* todos = MakeBox(screen_, 12, 44, 250, 164, 8);
-    MakeBand(todos, "今日待办", 0, 0, 232, 25);
-    MakeTimeRow(todos, "09:30", "理事会工作报告", 36, true);
-    MakeTimeRow(todos, "10:30", "审议与现场表决", 66, false);
-    MakeTimeRow(todos, "11:30", "午餐与交流", 96, false);
-    MakeTimeRow(todos, "14:00", "分论坛：产业协同", 126, false);
+    MakeHomeHeroCard(screen_);
+    MakeDeviceStatusPanel();
 
-    lv_obj_t* day = MakeBox(screen_, 274, 44, 114, 72, 8);
-    MakeLabel(day, "JUL", 0, 0, 88, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
-    MakeLabel(day, "05", 0, 20, 86, &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
-    MakeLabel(day, "周日", 62, 44, 42, &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
+    lv_obj_t* next = MakeBox(screen_, 12, 158, 376, 46, 8);
+    MakeLabel(next, "下一个", 4, 4, 56, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    MakeLabel(next, "10:30  审议与现场表决", 70, 2, 280, &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
 
-    lv_obj_t* status = MakeBox(screen_, 274, 128, 114, 80, 7);
-    network_title_label_ = MakeLabel(status, "离线", 0, 0, 96, &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
-    network_detail_label_ = MakeLabel(status, "本地模式", 0, 24, 96, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
-    MakeRule(status, 0, 48, 96);
-    network_hint_label_ = MakeLabel(status, "NFC Ready", 0, 56, 96, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
-
-    menu_rows_[0] = MakeMenuRow(0, "便利贴", "今日待办", 222);
-    menu_rows_[1] = MakeMenuRow(1, "实验室", "会议助手", 258);
+    menu_rows_[0] = MakeHomeActionCard(0, "便利贴", "今日待办", 12, 220);
+    menu_rows_[1] = MakeHomeActionCard(1, "实验室", "会议助手", 206, 220);
 }
 
-lv_obj_t* StickyNoteHomePageAdapter::MakeMenuRow(int index, const char* title, const char* subtitle, lv_coord_t y) {
+void StickyNoteHomePageAdapter::MakeDeviceStatusPanel() {
+    lv_obj_t* status = MakeBox(screen_, 260, 44, 128, 98, 8);
+    MakeLabel(status, "JUL", 0, 0, 52, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    MakeLabel(status, "05", 0, 22, 58, &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
+    MakeLabel(status, "周日", 66, 30, 44, &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
+    MakeRule(status, 0, 62, 110);
+    network_title_label_ = MakeLabel(status, "离线", 0, 72, 44, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    network_detail_label_ = MakeLabel(status, "本地", 50, 72, 42, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    network_hint_label_ = MakeLabel(status, "Ready", 88, 72, 38, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+}
+
+lv_obj_t* StickyNoteHomePageAdapter::MakeHomeActionCard(int index, const char* title, const char* subtitle,
+                                                        lv_coord_t x, lv_coord_t y) {
     lv_obj_t* row = lv_obj_create(screen_);
     StyleBox(row, 0);
-    lv_obj_set_size(row, 376, 30);
-    lv_obj_align(row, LV_ALIGN_TOP_LEFT, 12, y);
+    lv_obj_set_size(row, 182, 62);
+    lv_obj_align(row, LV_ALIGN_TOP_LEFT, x, y);
 
-    menu_titles_[index] = MakeLabel(row, title, 10, 4, 84, &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
-    menu_subtitles_[index] = MakeLabel(row, subtitle, 116, 7, 226, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    menu_titles_[index] = MakeLabel(row, title, 12, 9, 140, &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
+    menu_subtitles_[index] = MakeLabel(row, subtitle, 12, 36, 140, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
     return row;
 }
 

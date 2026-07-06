@@ -111,21 +111,9 @@ lv_obj_t* MakeLabStatusPill(lv_obj_t* parent, const char* text, lv_coord_t x, lv
 }
 
 void MakeLabConsoleHeader(lv_obj_t* parent) {
-    MakeLabStatusPill(parent, "CLIENT DEMO", 12, 44, 96, true);
-    MakeLabel(parent, "LAB CONSOLE", 120, 43, 160, &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
-    MakeLabStatusPill(parent, "LOCAL RTC", 300, 44, 88, false);
-}
-
-void MakeDemoStatusBar(lv_obj_t* parent) {
-    lv_obj_t* bar = lv_obj_create(parent);
-    StyleFilledBox(bar);
-    lv_obj_set_size(bar, 376, 32);
-    lv_obj_align(bar, LV_ALIGN_TOP_LEFT, 12, 256);
-
-    lv_obj_t* left = MakeLabel(bar, "DEMO READY", 10, 7, 90, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
-    lv_obj_set_style_text_color(left, lv_color_white(), 0);
-    lv_obj_t* right = MakeLabel(bar, "会议助手 / 资料 / 提醒 / 状态", 118, 7, 238, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
-    lv_obj_set_style_text_color(right, lv_color_white(), 0);
+    MakeLabStatusPill(parent, "实验功能", 12, 44, 96, true);
+    MakeLabel(parent, "低密度入口", 120, 43, 160, &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
+    MakeLabStatusPill(parent, "本地 RTC", 300, 44, 88, false);
 }
 
 }  // namespace
@@ -176,40 +164,41 @@ void LabFeaturesPageAdapter::Build() {
     lv_obj_align(hint, LV_ALIGN_RIGHT_MID, -12, 0);
 
     MakeLabConsoleHeader(screen_);
-    rows_[0] = MakeHeroFeatureCard(0, kTitles[0], kSubtitles[0], 78);
-    rows_[1] = MakeCapabilityTile(1, kTitles[1], kSubtitles[1], 12, 174);
-    rows_[2] = MakeCapabilityTile(2, kTitles[2], kSubtitles[2], 140, 174);
-    rows_[3] = MakeCapabilityTile(3, kTitles[3], kSubtitles[3], 268, 174);
-    MakeDemoStatusBar(screen_);
+    rows_[0] = MakeLabHeroCard(0, kTitles[0], kSubtitles[0], 54);
+    rows_[1] = MakeSimpleFeatureTile(1, kTitles[1], kSubtitles[1], 12, 160);
+    rows_[2] = MakeSimpleFeatureTile(2, kTitles[2], kSubtitles[2], 206, 160);
+    rows_[3] = MakeSimpleFeatureTile(3, kTitles[3], kSubtitles[3], 12, 240);
 
     built_ = true;
     UpdateContent();
 }
 
-lv_obj_t* LabFeaturesPageAdapter::MakeHeroFeatureCard(int index, const char* title, const char* subtitle, lv_coord_t y) {
+lv_obj_t* LabFeaturesPageAdapter::MakeLabHeroCard(int index, const char* title, const char* subtitle, lv_coord_t y) {
     lv_obj_t* row = lv_obj_create(screen_);
     StyleBox(row, 0);
-    lv_obj_set_size(row, 376, 82);
+    lv_obj_set_size(row, 376, 88);
     lv_obj_align(row, LV_ALIGN_TOP_LEFT, 12, y);
 
-    badges_[index] = MakeLabel(row, "OPEN", 12, 8, 54, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
-    titles_[index] = MakeLabel(row, title, 86, 8, 180, &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
-    subtitles_[index] = MakeLabel(row, subtitle, 86, 36, 260, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
-    MakeLabStatusPill(row, "确认进入", 286, 10, 72, false);
-    MakeLabStatusPill(row, "AI + QR", 286, 42, 72, false);
+    badges_[index] = MakeLabel(row, "进入", 284, 18, 70, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    titles_[index] = MakeLabel(row, title, 16, 12, 180, &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
+    subtitles_[index] = MakeLabel(row, subtitle, 16, 44, 240, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_WRAP);
+    MakeLabel(row, "AI / QR", 284, 46, 70, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
     return row;
 }
 
-lv_obj_t* LabFeaturesPageAdapter::MakeCapabilityTile(int index, const char* title, const char* subtitle,
-                                                     lv_coord_t x, lv_coord_t y) {
+lv_obj_t* LabFeaturesPageAdapter::MakeSimpleFeatureTile(int index, const char* title, const char* subtitle,
+                                                        lv_coord_t x, lv_coord_t y) {
     lv_obj_t* row = lv_obj_create(screen_);
     StyleBox(row, 0);
-    lv_obj_set_size(row, 120, 68);
+    const lv_coord_t width = index == 3 ? 376 : 182;
+    const lv_coord_t height = index == 3 ? 42 : 64;
+    lv_obj_set_size(row, width, height);
     lv_obj_align(row, LV_ALIGN_TOP_LEFT, x, y);
 
-    badges_[index] = MakeLabel(row, kNumbers[index], 8, 7, 30, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
-    titles_[index] = MakeLabel(row, title, 8, 26, 104, &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
-    subtitles_[index] = MakeLabel(row, subtitle, 8, 48, 104, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    badges_[index] = MakeLabel(row, kNumbers[index], 12, 10, 30, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    titles_[index] = MakeLabel(row, title, 52, 8, index == 3 ? 100 : 110, &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
+    subtitles_[index] = MakeLabel(row, subtitle, index == 3 ? 170 : 12, index == 3 ? 11 : 36,
+                                  index == 3 ? 184 : 150, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
     return row;
 }
 

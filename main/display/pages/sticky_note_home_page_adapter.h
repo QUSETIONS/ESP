@@ -32,7 +32,8 @@ private:
     void UpdateContent();
     void UpdateNetworkHint();
     void BuildHome();
-    lv_obj_t* MakeMenuRow(int index, const char* title, const char* subtitle, lv_coord_t y);
+    void MakeDeviceStatusPanel();
+    lv_obj_t* MakeHomeActionCard(int index, const char* title, const char* subtitle, lv_coord_t x, lv_coord_t y);
 
     bool built_ = false;
     int selected_index_ = 0;
