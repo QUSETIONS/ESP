@@ -217,18 +217,47 @@ def render_home(data: dict[str, Any]) -> Image.Image:
 def render_lab(data: dict[str, Any]) -> Image.Image:
     img, draw = canvas()
     header(draw, "实验室", "LAB")
-    text(draw, (12, 48), "实验功能", F18)
-    text(draw, (306, 51), data.get("device_status", {}).get("mode", "本地模式"), F12)
-    rows = data.get("lab_features", [])
-    for i, row in enumerate(rows[:4]):
-        x, y, w, h = 12, 78 + i * 48, 376, 40
-        selected = i == 0
-        box(draw, (x, y, w, h), fill=0 if selected else 255)
-        fill = 255 if selected else 0
-        text(draw, (x + 10, y + 9), f"{i + 1:02d}", F12, fill)
-        text(draw, (x + 52, y + 5), row.get("title", ""), F15, fill)
-        text(draw, (x + 176, y + 9), fit_text(row.get("subtitle", ""), 16), F12, fill)
+    lab_console(draw, data)
     return img
+
+
+def lab_console(draw: ImageDraw.ImageDraw, data: dict[str, Any]) -> None:
+    status_pill(draw, (12, 44, 96, 22), "CLIENT DEMO", True)
+    text(draw, (120, 43), "LAB CONSOLE", F18)
+    status_pill(draw, (300, 44, 88, 22), "LOCAL RTC")
+    rows = data.get("lab_features", [])
+    if rows:
+        hero_feature_card(draw, rows[0], True)
+    tile_positions = [(12, 174), (140, 174), (268, 174)]
+    for i, row in enumerate(rows[1:4]):
+        capability_tile(draw, row, i + 2, tile_positions[i], False)
+    demo_status_bar(draw)
+
+
+def hero_feature_card(draw: ImageDraw.ImageDraw, row: dict[str, str], selected: bool) -> None:
+    x, y, w, h = 12, 78, 376, 82
+    box(draw, (x, y, w, h), fill=0 if selected else 255)
+    fill = 255 if selected else 0
+    text(draw, (x + 12, y + 9), "OPEN", F12, fill)
+    text(draw, (x + 86, y + 8), row.get("title", "会议助手"), F18, fill)
+    text(draw, (x + 86, y + 38), fit_text(row.get("subtitle", ""), 26), F12, fill)
+    status_pill(draw, (x + 286, y + 10, 72, 22), "确认进入")
+    status_pill(draw, (x + 286, y + 42, 72, 22), "AI + QR")
+
+
+def capability_tile(draw: ImageDraw.ImageDraw, row: dict[str, str], number: int, xy, selected: bool) -> None:
+    x, y = xy
+    box(draw, (x, y, 120, 68), fill=0 if selected else 255)
+    fill = 255 if selected else 0
+    text(draw, (x + 8, y + 7), f"{number:02d}", F12, fill)
+    text(draw, (x + 8, y + 26), fit_text(row.get("title", ""), 8), F15, fill)
+    text(draw, (x + 8, y + 48), fit_text(row.get("subtitle", ""), 10), F10, fill)
+
+
+def demo_status_bar(draw: ImageDraw.ImageDraw) -> None:
+    draw.rectangle((12, 256, 388, 288), fill=0)
+    text(draw, (22, 263), "DEMO READY", F12, 255)
+    text(draw, (130, 263), "会议助手 / 资料 / 提醒 / 状态", F12, 255)
 
 
 def render_agenda(data: dict[str, Any]) -> Image.Image:
