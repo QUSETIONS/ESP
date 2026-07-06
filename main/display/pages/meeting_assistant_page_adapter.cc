@@ -28,10 +28,10 @@ const char* const kTitles[kPageCount] = {
 };
 
 const char* const kFooters[kPageCount] = {
-    "AGENDA BOARD  当前议程自动跟随时间",
-    "INFO KIOSK  扫码获取资料和互动入口",
-    "AI BOARD  摘要较长时可继续滚动",
-    "REMINDER BOARD  个人提醒到点自动高亮",
+    "EXEC CONSOLE  当前议程自动跟随时间",
+    "SCAN DESK  扫码获取资料和互动入口",
+    "AI CONSOLE  摘要较长时可继续滚动",
+    "ALERT DESK  个人提醒到点自动高亮",
 };
 
 void StylePlain(lv_obj_t* obj) {
@@ -169,9 +169,9 @@ void MakeStatusPill(lv_obj_t* parent, const char* text, lv_coord_t x, lv_coord_t
 
 void MakeDivider(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t w);
 
-void MakeBoardHeader(lv_obj_t* parent, const char* section, const char* title, const char* meta) {
+void MakeConsoleHeader(lv_obj_t* parent, const char* section, const char* title, const char* meta) {
     MakeStatusPill(parent, section, 10, 8, 92, true);
-    MakeLabel(parent, title, 114, 8, 174, &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
+    MakeLabel(parent, title, 114, 7, 174, &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
     MakeStatusPill(parent, meta, 298, 8, 92, false);
     MakeDivider(parent, 10, 39, 380);
 }
@@ -192,6 +192,20 @@ void MakeTimelineItem(lv_obj_t* parent, const char* time, const char* text, lv_c
     }
     MakeLabel(parent, text, 84, y + 3, 282, active ? &SourceHanSansSC_Medium_slim : &BUILTIN_TEXT_FONT,
               LV_LABEL_LONG_CLIP);
+}
+
+void MakeSignalRail(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t h, bool active) {
+    lv_obj_t* rail = lv_obj_create(parent);
+    StyleFilled(rail, 0);
+    lv_obj_set_size(rail, active ? 4 : 2, h);
+    lv_obj_align(rail, LV_ALIGN_TOP_LEFT, x, y);
+
+    for (lv_coord_t offset = 0; offset <= h - 6; offset += 24) {
+        lv_obj_t* dot = lv_obj_create(parent);
+        StyleFilled(dot, 0);
+        lv_obj_set_size(dot, 6, 6);
+        lv_obj_align(dot, LV_ALIGN_TOP_LEFT, x - 1, y + offset);
+    }
 }
 
 lv_obj_t* MakeSoftSection(lv_obj_t* parent, const char* title, lv_coord_t x, lv_coord_t y, lv_coord_t w,
@@ -217,6 +231,42 @@ void BuildKioskQrCard(lv_obj_t* parent, const char* title, const char* subtitle,
     lv_obj_set_style_border_width(qr, kQrQuietZone, 0);
     lv_obj_set_style_border_color(qr, lv_color_white(), 0);
     lv_obj_align(qr, LV_ALIGN_BOTTOM_MID, 0, -kQrQuietZone);
+}
+
+void BuildPrimaryQrPanel(lv_obj_t* parent, const char* title, const char* subtitle, const char* data,
+                         lv_coord_t x, lv_coord_t y) {
+    lv_obj_t* card = MakeBox(parent, x, y, 214, 198, kQrQuietZone);
+    MakeInvertedBand(card, title, 0, 0, 202, 28, &SourceHanSansSC_Medium_slim);
+    MakeLabel(card, subtitle, 0, 38, 202, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+
+    lv_obj_t* qr = lv_qrcode_create(card);
+    lv_qrcode_set_size(qr, 132);
+    lv_qrcode_set_dark_color(qr, lv_color_black());
+    lv_qrcode_set_light_color(qr, lv_color_white());
+    lv_qrcode_update(qr, data, static_cast<uint32_t>(strlen(data)));
+    lv_obj_set_style_border_width(qr, kQrQuietZone, 0);
+    lv_obj_set_style_border_color(qr, lv_color_white(), 0);
+    lv_obj_align(qr, LV_ALIGN_BOTTOM_MID, 0, -8);
+}
+
+void BuildHeroAgendaPanel(lv_obj_t* parent, const MeetingAgendaItem& item, const char* meta) {
+    lv_obj_t* panel = MakeBox(parent, 10, 50, 380, 104, 10);
+    MakeSignalRail(panel, 0, 5, 74, true);
+    MakeClockBlock(panel, item.time.empty() ? "--:--" : item.time.c_str(), 16, 10, 66);
+    MakeLabel(panel, "CURRENT SESSION", 106, 2, 176, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    MakeWrappedLabel(panel, item.title.c_str(), 106, 24, 248, 42, &SourceHanSansSC_Medium_slim);
+    MakeDivider(panel, 106, 70, 248);
+    MakeLabel(panel, meta, 106, 80, 248, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+}
+
+void MakeKeywordStrip(lv_obj_t* parent, const MeetingData& data, lv_coord_t x, lv_coord_t y) {
+    lv_coord_t cursor_x = x;
+    lv_coord_t cursor_y = y;
+    for (size_t i = 0; i < data.keyword_count && i < 4; ++i) {
+        const lv_coord_t width = i == 0 ? 86 : 76;
+        MakeStatusPill(parent, data.keywords[i].c_str(), cursor_x, cursor_y, width, i == 0);
+        cursor_y += 28;
+    }
 }
 
 void BuildReminderTitle(lv_obj_t* parent, const char* title, lv_coord_t y, bool active) {
@@ -362,15 +412,12 @@ void MeetingAssistantPageAdapter::SetTimeLabel(const std::string& value) {
 }
 
 void MeetingAssistantPageAdapter::BuildAgendaBoardPage() {
-    MakeBoardHeader(content_, "AGENDA", "AGENDA BOARD", "LIVE");
-    lv_obj_t* current = MakeBox(content_, 10, 52, 380, 82, 10);
+    MakeConsoleHeader(content_, "LIVE", "EXEC CONSOLE", "09:30");
     const size_t current_index = meeting_data_.agenda_count > 0
         ? static_cast<size_t>(meeting_data_.current_agenda_index)
         : 0;
     const MeetingAgendaItem empty_item = {};
     const MeetingAgendaItem& current_item = meeting_data_.agenda_count > 0 ? meeting_data_.agenda[current_index] : empty_item;
-    MakeClockBlock(current, current_item.time.empty() ? "--:--" : current_item.time.c_str(), 0, 0, 62);
-    MakeWrappedLabel(current, current_item.title.c_str(), 88, 2, 266, 40, &SourceHanSansSC_Medium_slim);
     std::string meta = current_item.speaker;
     if (!current_item.note.empty()) {
         if (!meta.empty()) {
@@ -378,12 +425,12 @@ void MeetingAssistantPageAdapter::BuildAgendaBoardPage() {
         }
         meta += current_item.note;
     }
-    MakeLabel(current, meta.c_str(), 88, 54, 266, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
-    MakeStatusPill(content_, "NEXT", 12, 146, 58, true);
-    MakeLabel(content_, "接下来的议程", 84, 148, 150, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
-    MakeDivider(content_, 10, 176, 380);
+    BuildHeroAgendaPanel(content_, current_item, meta.c_str());
+    MakeStatusPill(content_, "NEXT UP", 12, 168, 68, true);
+    MakeLabel(content_, "接下来的议程", 92, 171, 150, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    MakeDivider(content_, 10, 198, 380);
 
-    lv_coord_t y = 190;
+    lv_coord_t y = 212;
     for (size_t i = current_index + 1; i < meeting_data_.agenda_count && y <= 360; ++i, y += 34) {
         MakeTimelineItem(content_,
                          meeting_data_.agenda[i].time.c_str(),
@@ -394,19 +441,19 @@ void MeetingAssistantPageAdapter::BuildAgendaBoardPage() {
 }
 
 void MeetingAssistantPageAdapter::BuildMaterialsPage() {
-    MakeBoardHeader(content_, "KIOSK", "INFO KIOSK", "SCAN");
-    BuildKioskQrCard(content_, "资料下载", meeting_data_.materials_label.c_str(), meeting_data_.materials_url.c_str(),
-                     12, 58, 180, 194, 132);
+    MakeConsoleHeader(content_, "SCAN", "SCAN DESK", "2 CODES");
+    BuildPrimaryQrPanel(content_, "资料下载", meeting_data_.materials_label.c_str(), meeting_data_.materials_url.c_str(),
+                        12, 56);
     BuildKioskQrCard(content_, "现场提问", meeting_data_.interaction_label.c_str(), meeting_data_.interaction_url.c_str(),
-                     208, 58, 180, 194, 132);
-    MakeLabel(content_, "手机扫码后可下载 PPT/PDF、提交问题或同步到个人日程。", 18, 266, 360,
+                     244, 76, 144, 166, 104);
+    MakeLabel(content_, "主入口用于下载 PPT/PDF；右侧入口用于现场提问。", 18, 266, 360,
               &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
 }
 
 void MeetingAssistantPageAdapter::BuildInsightBoardPage() {
-    MakeBoardHeader(content_, "AI", "AI BOARD", "SCROLL");
-    MakeStatusPill(content_, meeting_data_.summary_title.c_str(), 10, 49, 252, false);
-    lv_obj_t* main = MakeSoftSection(content_, "核心要点", kMargin, 78, 252, 208);
+    MakeConsoleHeader(content_, "AI", "AI CONSOLE", "SCROLL");
+    MakeStatusPill(content_, meeting_data_.summary_title.c_str(), 10, 48, 252, false);
+    lv_obj_t* main = MakeSoftSection(content_, "核心要点", kMargin, 76, 252, 210);
     std::string bullets;
     for (size_t i = 0; i < meeting_data_.summary_bullet_count; ++i) {
         bullets += meeting_data_.summary_bullets[i];
@@ -416,18 +463,11 @@ void MeetingAssistantPageAdapter::BuildInsightBoardPage() {
     }
     MakeWrappedLabel(main, bullets.c_str(), 0, 42, 234, 148, &BUILTIN_TEXT_FONT);
 
-    lv_obj_t* side = MakeBox(content_, 276, 78, 112, 208, 7);
+    lv_obj_t* side = MakeBox(content_, 276, 76, 112, 210, 7);
     MakeInvertedBand(side, "关键词", 0, 0, 94, 25);
-    std::string keywords;
-    for (size_t i = 0; i < meeting_data_.keyword_count; ++i) {
-        keywords += meeting_data_.keywords[i];
-        if (i + 1 < meeting_data_.keyword_count) {
-            keywords += "\n";
-        }
-    }
-    MakeLabel(side, keywords.c_str(), 0, 38, 94, &BUILTIN_TEXT_FONT);
-    MakeDivider(side, 0, 126, 94);
-    MakeLabel(side, "待办\n审议规划\n确认预算", 0, 140, 94, &BUILTIN_TEXT_FONT);
+    MakeKeywordStrip(side, meeting_data_, 0, 38);
+    MakeDivider(side, 0, 154, 94);
+    MakeLabel(side, "行动项\n审议规划\n确认预算", 0, 168, 94, &BUILTIN_TEXT_FONT);
 
     lv_obj_t* actions = MakeSoftSection(content_, "后续动作", 10, 306, 378, 124);
     MakeWrappedLabel(actions, "1. 会后同步审议结果。\n2. 汇总现场问题并形成答复清单。\n3. 更新个人提醒和下一场会议材料。",
@@ -436,10 +476,10 @@ void MeetingAssistantPageAdapter::BuildInsightBoardPage() {
 
 void MeetingAssistantPageAdapter::BuildReminderBoardPage() {
     std::string title = meeting_data_.attendee_name + "  个人提醒";
-    MakeBoardHeader(content_, "REMIND", "REMINDER BOARD", "ALERT");
-    MakeStatusPill(content_, title.c_str(), 10, 49, 214, false);
+    MakeConsoleHeader(content_, "ALERT", "ALERT DESK", "AUTO");
+    MakeStatusPill(content_, title.c_str(), 10, 48, 214, false);
 
-    lv_obj_t* list = MakeBox(content_, kMargin, 78, 214, 168, 10);
+    lv_obj_t* list = MakeBox(content_, kMargin, 76, 214, 170, 10);
     for (size_t i = 0; i < meeting_data_.reminder_count && i < 3; ++i) {
         const lv_coord_t y = static_cast<lv_coord_t>(i * 54);
         const bool active = meeting_data_.active_reminder_index == static_cast<int>(i);
@@ -450,7 +490,7 @@ void MeetingAssistantPageAdapter::BuildReminderBoardPage() {
         }
     }
 
-    BuildKioskQrCard(content_, "自定义提醒", "微信扫码修改", meeting_data_.reminder_url.c_str(), 242, 66, 146, 204, 120);
+    BuildKioskQrCard(content_, "提醒设置", "微信扫码修改", meeting_data_.reminder_url.c_str(), 242, 76, 146, 194, 112);
     lv_obj_t* extra = MakeSoftSection(content_, "备注", 10, 282, 378, 104);
     MakeWrappedLabel(extra, "请提前 10 分钟到达分论坛会场。会后材料将通过资料入口同步更新。",
                      0, 42, 350, 48, &BUILTIN_TEXT_FONT);
