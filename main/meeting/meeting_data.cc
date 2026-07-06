@@ -39,6 +39,7 @@ MeetingData MakeDefaultMeetingData() {
     data.meeting_id = "local-default";
     data.attendee_name = "张军先生";
     data.current_agenda_index = 0;
+    data.active_reminder_index = -1;
 
     data.agenda_count = 5;
     data.agenda[0] = {"09:30", "理事会工作报告", "孙晓华 主席", "剩余 20 分钟"};

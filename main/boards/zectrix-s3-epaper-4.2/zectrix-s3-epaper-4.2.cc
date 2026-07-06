@@ -9,9 +9,12 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <ctime>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <sys/time.h>
 
@@ -41,6 +44,10 @@ namespace {
 constexpr char kTag[] = "ZectrixFtBoard";
 constexpr uint16_t kNavLongPressMs = 1000;
 constexpr time_t kValidUnixTimeThreshold = 1704067200;  // 2024-01-01 00:00:00 UTC
+constexpr int kReminderLeadMinutes = 10;
+constexpr int kReminderHoldMinutes = 5;
+constexpr int kMeetingTimedUpdateIntervalMs = 30000;
+constexpr int kMeetingDataRefreshIntervalMs = 120000;
 
 enum class BoardUiMode : uint8_t {
     StickyNote = 0,
@@ -284,8 +291,13 @@ private:
                                         DISPLAY_MIRROR_Y,
                                         DISPLAY_SWAP_XY,
                                         lcd_spi_data);
-        display_->SetMeetingData(MakeDefaultMeetingData());
+        {
+            std::lock_guard<std::mutex> lock(meeting_data_mutex_);
+            meeting_data_ = MakeDefaultMeetingData();
+        }
+        ApplyTimedMeetingState(true);
         RefreshClockLabels();
+        StartTimedMeetingTask();
     }
 
     void HandleWifiEvent(WifiEvent event) {
@@ -301,8 +313,10 @@ private:
                 ESP_LOGI(kTag, "Wi-Fi connected: ssid=%s ip=%s",
                          wifi.GetSsid().c_str(),
                          wifi.GetIpAddress().c_str());
+                wifi_connected_ = true;
                 StartSntpIfNeeded();
                 TrySyncRtcFromSystemTime();
+                ApplyTimedMeetingState(true);
                 RefreshClockLabels();
                 if (display_ != nullptr) {
                     display_->SetStickyNoteNetworkHint("在线", wifi.GetSsid(), wifi.GetIpAddress());
@@ -315,6 +329,7 @@ private:
                 break;
             case WifiEvent::Disconnected:
                 ESP_LOGW(kTag, "Wi-Fi disconnected");
+                wifi_connected_ = false;
                 NotifyNetworkEvent(NetworkEvent::Disconnected, "");
                 break;
             case WifiEvent::ConfigModeEnter:
@@ -446,6 +461,140 @@ private:
         display_->SetClockLabels(home_buf, meeting_buf);
     }
 
+    bool GetBestLocalTime(tm& out_local_tm) {
+        if (GetSystemLocalTime(out_local_tm)) {
+            return true;
+        }
+        return rtc_ != nullptr && rtc_->GetTime(out_local_tm) && IsValidLocalTime(out_local_tm);
+    }
+
+    static int ParseAgendaStartMinutes(const std::string& value) {
+        for (size_t i = 0; i + 4 < value.size(); ++i) {
+            if (std::isdigit(static_cast<unsigned char>(value[i])) &&
+                std::isdigit(static_cast<unsigned char>(value[i + 1])) &&
+                value[i + 2] == ':' &&
+                std::isdigit(static_cast<unsigned char>(value[i + 3])) &&
+                std::isdigit(static_cast<unsigned char>(value[i + 4]))) {
+                const int hour = (value[i] - '0') * 10 + (value[i + 1] - '0');
+                const int minute = (value[i + 3] - '0') * 10 + (value[i + 4] - '0');
+                if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
+                    return hour * 60 + minute;
+                }
+            }
+        }
+        return -1;
+    }
+
+    static int CurrentMinutes(const tm& local_tm) {
+        return local_tm.tm_hour * 60 + local_tm.tm_min;
+    }
+
+    static int ResolveCurrentAgendaIndex(const MeetingData& data, const tm& local_tm) {
+        if (data.agenda_count == 0) {
+            return 0;
+        }
+
+        const int now = CurrentMinutes(local_tm);
+        int resolved = std::clamp(data.current_agenda_index, 0, static_cast<int>(data.agenda_count - 1));
+        for (size_t i = 0; i < data.agenda_count; ++i) {
+            const int start = ParseAgendaStartMinutes(data.agenda[i].time);
+            if (start < 0) {
+                continue;
+            }
+            if (now >= start) {
+                resolved = static_cast<int>(i);
+            } else {
+                break;
+            }
+        }
+        return resolved;
+    }
+
+    static int ResolveActiveReminderIndex(const MeetingData& data, const tm& local_tm) {
+        const int now = CurrentMinutes(local_tm);
+        for (size_t i = 0; i < data.reminder_count; ++i) {
+            const int start = ParseAgendaStartMinutes(data.reminders[i].time);
+            if (start < 0) {
+                continue;
+            }
+            if (now >= start - kReminderLeadMinutes && now <= start + kReminderHoldMinutes) {
+                return static_cast<int>(i);
+            }
+        }
+        return -1;
+    }
+
+    static bool ApplyTimedFields(MeetingData& data, const tm& local_tm) {
+        bool changed = false;
+        const int current_agenda = ResolveCurrentAgendaIndex(data, local_tm);
+        if (data.current_agenda_index != current_agenda) {
+            data.current_agenda_index = current_agenda;
+            changed = true;
+        }
+
+        const int active_reminder = ResolveActiveReminderIndex(data, local_tm);
+        if (data.active_reminder_index != active_reminder) {
+            data.active_reminder_index = active_reminder;
+            changed = true;
+        }
+        return changed;
+    }
+
+    void ApplyTimedMeetingState(bool force_push) {
+        MeetingData data_snapshot;
+        bool should_push = force_push;
+
+        tm local_tm = {};
+        const bool has_time = GetBestLocalTime(local_tm);
+        {
+            std::lock_guard<std::mutex> lock(meeting_data_mutex_);
+            if (has_time) {
+                should_push = ApplyTimedFields(meeting_data_, local_tm) || should_push;
+            }
+            data_snapshot = meeting_data_;
+        }
+
+        RefreshClockLabels();
+        if (should_push && display_ != nullptr) {
+            display_->SetMeetingData(data_snapshot);
+            if (display_->IsMeetingAssistantPageActive()) {
+                display_->RequestUrgentRefresh();
+            }
+        }
+    }
+
+    static void TimedMeetingTaskEntry(void* arg) {
+        static_cast<CustomBoard*>(arg)->TimedMeetingTask();
+    }
+
+    void StartTimedMeetingTask() {
+        if (timed_meeting_task_ != nullptr) {
+            return;
+        }
+        if (xTaskCreate(TimedMeetingTaskEntry,
+                        "meeting_timer",
+                        4096,
+                        this,
+                        3,
+                        &timed_meeting_task_) != pdPASS) {
+            timed_meeting_task_ = nullptr;
+            ESP_LOGE(kTag, "Failed to create timed meeting task");
+        }
+    }
+
+    void TimedMeetingTask() {
+        int64_t last_refresh_ms = GetNowMs();
+        for (;;) {
+            ApplyTimedMeetingState(false);
+            const int64_t now_ms = GetNowMs();
+            if (wifi_connected_ && now_ms - last_refresh_ms >= kMeetingDataRefreshIntervalMs) {
+                StartMeetingFetchTask();
+                last_refresh_ms = now_ms;
+            }
+            vTaskDelay(pdMS_TO_TICKS(kMeetingTimedUpdateIntervalMs));
+        }
+    }
+
     void NotifyNetworkEvent(NetworkEvent event, const std::string& data) {
         if (network_event_callback_) {
             network_event_callback_(event, data);
@@ -524,6 +673,14 @@ private:
         ESP_LOGI(kTag, "Meeting data loaded: id=%s agenda=%u",
                  data.meeting_id.c_str(),
                  static_cast<unsigned>(data.agenda_count));
+        tm local_tm = {};
+        if (GetBestLocalTime(local_tm)) {
+            ApplyTimedFields(data, local_tm);
+        }
+        {
+            std::lock_guard<std::mutex> lock(meeting_data_mutex_);
+            meeting_data_ = data;
+        }
         if (display_ != nullptr) {
             display_->SetMeetingData(data);
             if (display_->IsMeetingAssistantPageActive()) {
@@ -709,10 +866,14 @@ private:
     std::unique_ptr<RtcPcf8563> rtc_;
     std::unique_ptr<ZectrixNfc> nfc_;
     ChargeStatus charge_status_;
+    std::mutex meeting_data_mutex_;
+    MeetingData meeting_data_;
     NetworkEventCallback network_event_callback_;
     bool network_started_ = false;
+    bool wifi_connected_ = false;
     bool sntp_started_ = false;
     TaskHandle_t meeting_fetch_task_ = nullptr;
+    TaskHandle_t timed_meeting_task_ = nullptr;
     BoardUiMode ui_mode_ = BoardUiMode::StickyNote;
     Button up_button_;
     Button down_button_;

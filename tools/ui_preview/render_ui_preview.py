@@ -103,6 +103,20 @@ def band(draw: ImageDraw.ImageDraw, xywh, title: str) -> None:
     text(draw, (x + 7, y + 3), fit_text(title, 18), F14, 255)
 
 
+def pass_stamp(draw: ImageDraw.ImageDraw, x: int, y: int, w: int, title: str, subtitle: str) -> None:
+    draw.rectangle((x, y, x + 46, y + 42), fill=0)
+    text(draw, (x + 8, y + 14), "PASS", F12, 255)
+    box(draw, (x + 46, y, w - 46, 42))
+    text(draw, (x + 56, y + 6), fit_text(title, 20), F16)
+    text(draw, (x + 56, y + 25), fit_text(subtitle, 25), F12)
+
+
+def now_block(draw: ImageDraw.ImageDraw, x: int, y: int, h: int, value: str) -> None:
+    draw.rectangle((x, y, x + 64, y + h), fill=0)
+    text(draw, (x + 19, y + 7), "NOW", F10, 255)
+    text(draw, (x + 12, y + h - 24), value, F14, 255)
+
+
 def time_row(draw: ImageDraw.ImageDraw, x: int, y: int, t: str, title: str, active: bool = False) -> None:
     if active:
         draw.rectangle((x, y, x + 50, y + 22), fill=0)
@@ -192,16 +206,15 @@ def render_agenda(data: dict[str, Any]) -> Image.Image:
     current_idx = int(data.get("current_agenda_index", 0))
     items = agenda_items(data)
     current = items[current_idx] if 0 <= current_idx < len(items) else (items[0] if items else {})
-    header(draw, "会议议程", "1/4")
-    band(draw, (10, 42, 380, 25), "当前议程")
-    box(draw, (10, 78, 380, 74))
-    draw.rectangle((20, 90, 76, 114), fill=0)
-    text(draw, (28, 95), current.get("time", "--:--"), F12, 255)
-    multiline(draw, (88, 86), current.get("title", ""), F16, 0, 286, 2, 3)
+    header(draw, "GoTim ink", "1/4")
+    pass_stamp(draw, 10, 42, 380, "MEETING PASS", "会议议程 / 自动跟随时间")
+    box(draw, (10, 96, 380, 82))
+    now_block(draw, 20, 106, 62, current.get("time", "--:--"))
+    multiline(draw, (98, 104), current.get("title", ""), F16, 0, 276, 2, 3)
     meta = " | ".join(part for part in (current.get("speaker", ""), current.get("note", "")) if part)
-    text(draw, (88, 130), fit_text(meta, 26), F12)
+    text(draw, (98, 154), fit_text(meta, 26), F12)
     for i, item in enumerate(items[current_idx + 1: current_idx + 6]):
-        time_row(draw, 22, 166 + i * 28, item.get("time", "--:--"), item.get("title", ""))
+        time_row(draw, 22, 192 + i * 28, item.get("time", "--:--"), item.get("title", ""))
     return img
 
 
@@ -209,31 +222,31 @@ def render_materials(data: dict[str, Any]) -> Image.Image:
     img, draw = canvas()
     materials = data.get("materials", {})
     interaction = data.get("interaction", {})
-    header(draw, "会议资料与互动", "2/4")
-    band(draw, (10, 44, 380, 26), "资料和互动入口")
-    qr_card(img, draw, (12, 82, 180, 194), "资料下载", materials.get("label", "PPT / PDF"), materials.get("url", "https://msh.cn/m"))
-    qr_card(img, draw, (208, 82, 180, 194), "现场提问", interaction.get("label", "提交问题"), interaction.get("url", "https://msh.cn/q"))
+    header(draw, "GoTim ink", "2/4")
+    pass_stamp(draw, 10, 42, 380, "MEETING PASS", "资料与互动 / 扫码继续")
+    qr_card(img, draw, (12, 96, 180, 194), "资料下载", materials.get("label", "PPT / PDF"), materials.get("url", "https://msh.cn/m"))
+    qr_card(img, draw, (208, 96, 180, 194), "现场提问", interaction.get("label", "提交问题"), interaction.get("url", "https://msh.cn/q"))
     return img
 
 
 def render_summary(data: dict[str, Any]) -> Image.Image:
     img, draw = canvas()
     summary = data.get("summary", {})
-    header(draw, "AI 会议要点", "3/4")
-    band(draw, (10, 44, 380, 25), summary.get("title", "09:35 AI 摘要"))
-    box(draw, (10, 82, 252, 194))
-    text(draw, (20, 92), "核心要点", F16)
-    draw.line((20, 120, 250, 120), fill=0)
-    y = 132
+    header(draw, "GoTim ink", "3/4")
+    pass_stamp(draw, 10, 42, 380, "AI NOTE", summary.get("title", "09:35 AI 摘要"))
+    box(draw, (10, 96, 252, 194))
+    text(draw, (20, 106), "核心要点", F16)
+    draw.line((20, 134, 250, 134), fill=0)
+    y = 146
     for line in summary.get("bullets", [])[:4]:
         lines = wrap_text(draw, line, F12, 224, 2)
         for wrapped in lines:
             text(draw, (20, y), wrapped, F12)
             y += 17
         y += 4
-    box(draw, (276, 82, 112, 194))
-    band(draw, (284, 90, 94, 25), "关键词")
-    text(draw, (284, 130), "\n".join(summary.get("keywords", [])[:5]), F12)
+    box(draw, (276, 96, 112, 194))
+    band(draw, (284, 104, 94, 25), "关键词")
+    text(draw, (284, 144), "\n".join(summary.get("keywords", [])[:5]), F12)
     return img
 
 
@@ -241,17 +254,22 @@ def render_reminder(data: dict[str, Any]) -> Image.Image:
     img, draw = canvas()
     user = data.get("attendee", {})
     reminder = data.get("reminder", {})
-    header(draw, "个人提醒", "4/4")
-    band(draw, (10, 44, 214, 28), user.get("name", "参会者"))
-    box(draw, (10, 86, 214, 174))
+    header(draw, "GoTim ink", "4/4")
+    pass_stamp(draw, 10, 42, 380, "PERSONAL PASS", f"{user.get('name', '参会者')} / 个人提醒")
+    box(draw, (10, 96, 214, 174))
+    active_index = int(data.get("active_reminder_index", -1))
     for i, item in enumerate(reminder.get("items", [])[:3]):
-        y = 98 + i * 48
+        y = 108 + i * 48
         draw.rectangle((22, y, 76, y + 24), fill=0)
         text(draw, (29, y + 5), item.get("time", "--:--"), F12, 255)
-        multiline(draw, (88, y + 2), item.get("title", ""), F15, 0, 122, 2, 2)
+        if i == active_index:
+            draw.rectangle((84, y - 2, 212, y + 34), fill=0)
+            multiline(draw, (90, y + 2), item.get("title", ""), F15, 255, 116, 2, 2)
+        else:
+            multiline(draw, (88, y + 2), item.get("title", ""), F15, 0, 122, 2, 2)
         if i < 2:
             draw.line((22, y + 38, 210, y + 38), fill=0)
-    qr_card(img, draw, (242, 72, 146, 204), "提醒设置", "扫码修改", reminder.get("url", "https://msh.cn/r"))
+    qr_card(img, draw, (242, 86, 146, 204), "提醒设置", "扫码修改", reminder.get("url", "https://msh.cn/r"))
     return img
 
 

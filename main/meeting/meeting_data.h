@@ -25,6 +25,7 @@ struct MeetingData {
     std::string meeting_id = "local-default";
     std::string attendee_name = "张军先生";
     int current_agenda_index = 0;
+    int active_reminder_index = -1;
 
     std::array<MeetingAgendaItem, kMaxAgendaItems> agenda = {};
     size_t agenda_count = 0;
