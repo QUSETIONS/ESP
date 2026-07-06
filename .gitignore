@@ -9,4 +9,5 @@ __pycache__/
 .vscode/*.log
 managed_components/**/__pycache__/
 tools/ui_preview/server.log
+tools/ui_preview/out/index.html
 output/
