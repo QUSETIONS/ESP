@@ -103,17 +103,25 @@ def band(draw: ImageDraw.ImageDraw, xywh, title: str) -> None:
     text(draw, (x + 7, y + 3), fit_text(title, 18), F14, 255)
 
 
-def pass_stamp(draw: ImageDraw.ImageDraw, x: int, y: int, w: int, title: str, subtitle: str) -> None:
-    draw.rectangle((x, y, x + 46, y + 42), fill=0)
-    text(draw, (x + 8, y + 14), "PASS", F12, 255)
-    box(draw, (x + 46, y, w - 46, 42))
-    text(draw, (x + 56, y + 6), fit_text(title, 20), F16)
-    text(draw, (x + 56, y + 25), fit_text(subtitle, 25), F12)
+def status_pill(draw: ImageDraw.ImageDraw, xywh, label: str, inverted: bool = False) -> None:
+    x, y, w, h = xywh
+    box(draw, (x, y, w, h), fill=0 if inverted else 255)
+    fill = 255 if inverted else 0
+    visible = fit_text(label, 14)
+    text_width = int(draw.textlength(visible, font=F12))
+    text(draw, (x + max(4, (w - text_width) // 2), y + 4), visible, F12, fill)
 
 
-def now_block(draw: ImageDraw.ImageDraw, x: int, y: int, h: int, value: str) -> None:
-    draw.rectangle((x, y, x + 64, y + h), fill=0)
-    text(draw, (x + 19, y + 7), "NOW", F10, 255)
+def board_header(draw: ImageDraw.ImageDraw, section: str, title: str, meta: str) -> None:
+    status_pill(draw, (10, 42, 92, 22), section, True)
+    text(draw, (114, 42), fit_text(title, 18), F18)
+    status_pill(draw, (298, 42, 92, 22), meta)
+    draw.line((10, 74, 390, 74), fill=0)
+
+
+def clock_block(draw: ImageDraw.ImageDraw, x: int, y: int, h: int, value: str) -> None:
+    draw.rectangle((x, y, x + 74, y + h), fill=0)
+    text(draw, (x + 18, y + 7), "ON AIR", F10, 255)
     text(draw, (x + 12, y + h - 24), value, F14, 255)
 
 
@@ -143,7 +151,7 @@ def qr(payload: str, size: int) -> Image.Image:
     return img.resize((size, size), Image.Resampling.NEAREST)
 
 
-def qr_card(img: Image.Image, draw: ImageDraw.ImageDraw, xywh, title: str, subtitle: str, payload: str) -> None:
+def kiosk_qr_card(img: Image.Image, draw: ImageDraw.ImageDraw, xywh, title: str, subtitle: str, payload: str) -> None:
     x, y, w, h = xywh
     box(draw, (x, y, w, h))
     draw.rectangle((x + 8, y + 8, x + w - 9, y + 34), fill=0)
@@ -207,15 +215,26 @@ def render_agenda(data: dict[str, Any]) -> Image.Image:
     items = agenda_items(data)
     current = items[current_idx] if 0 <= current_idx < len(items) else (items[0] if items else {})
     header(draw, "GoTim ink", "1/4")
-    pass_stamp(draw, 10, 42, 380, "MEETING PASS", "会议议程 / 自动跟随时间")
-    box(draw, (10, 96, 380, 82))
-    now_block(draw, 20, 106, 62, current.get("time", "--:--"))
-    multiline(draw, (98, 104), current.get("title", ""), F16, 0, 276, 2, 3)
-    meta = " | ".join(part for part in (current.get("speaker", ""), current.get("note", "")) if part)
-    text(draw, (98, 154), fit_text(meta, 26), F12)
-    for i, item in enumerate(items[current_idx + 1: current_idx + 6]):
-        time_row(draw, 22, 192 + i * 28, item.get("time", "--:--"), item.get("title", ""))
+    agenda_board(img, draw, data)
     return img
+
+
+def agenda_board(img: Image.Image, draw: ImageDraw.ImageDraw, data: dict[str, Any]) -> None:
+    current_idx = int(data.get("current_agenda_index", 0))
+    items = agenda_items(data)
+    current = items[current_idx] if 0 <= current_idx < len(items) else (items[0] if items else {})
+    board_header(draw, "AGENDA", "AGENDA BOARD", "LIVE")
+    box(draw, (10, 86, 380, 82))
+    clock_block(draw, 20, 96, 62, current.get("time", "--:--"))
+    multiline(draw, (108, 94), current.get("title", ""), F16, 0, 252, 2, 3)
+    meta = " | ".join(part for part in (current.get("speaker", ""), current.get("note", "")) if part)
+    text(draw, (108, 144), fit_text(meta, 24), F12)
+    status_pill(draw, (12, 180, 58, 22), "NEXT", True)
+    text(draw, (84, 183), "接下来的议程", F12)
+    draw.line((10, 210, 390, 210), fill=0)
+    for i, item in enumerate(items[current_idx + 1: current_idx + 3]):
+        time_row(draw, 22, 224 + i * 28, item.get("time", "--:--"), item.get("title", ""))
+    text(draw, (22, 280), "向下滚动查看更多", F12)
 
 
 def render_materials(data: dict[str, Any]) -> Image.Image:
@@ -223,9 +242,10 @@ def render_materials(data: dict[str, Any]) -> Image.Image:
     materials = data.get("materials", {})
     interaction = data.get("interaction", {})
     header(draw, "GoTim ink", "2/4")
-    pass_stamp(draw, 10, 42, 380, "MEETING PASS", "资料与互动 / 扫码继续")
-    qr_card(img, draw, (12, 96, 180, 194), "资料下载", materials.get("label", "PPT / PDF"), materials.get("url", "https://msh.cn/m"))
-    qr_card(img, draw, (208, 96, 180, 194), "现场提问", interaction.get("label", "提交问题"), interaction.get("url", "https://msh.cn/q"))
+    board_header(draw, "KIOSK", "INFO KIOSK", "SCAN")
+    kiosk_qr_card(img, draw, (12, 88, 180, 184), "资料下载", materials.get("label", "PPT / PDF"), materials.get("url", "https://msh.cn/m"))
+    kiosk_qr_card(img, draw, (208, 88, 180, 184), "现场提问", interaction.get("label", "提交问题"), interaction.get("url", "https://msh.cn/q"))
+    text(draw, (18, 280), "扫码下载材料、提交问题或同步到个人日程", F12)
     return img
 
 
@@ -233,20 +253,24 @@ def render_summary(data: dict[str, Any]) -> Image.Image:
     img, draw = canvas()
     summary = data.get("summary", {})
     header(draw, "GoTim ink", "3/4")
-    pass_stamp(draw, 10, 42, 380, "AI NOTE", summary.get("title", "09:35 AI 摘要"))
-    box(draw, (10, 96, 252, 194))
-    text(draw, (20, 106), "核心要点", F16)
-    draw.line((20, 134, 250, 134), fill=0)
-    y = 146
+    board_header(draw, "AI", "AI BOARD", "SCROLL")
+    status_pill(draw, (10, 84, 252, 22), summary.get("title", "09:35 AI 摘要"))
+    box(draw, (10, 116, 252, 174))
+    text(draw, (20, 126), "核心要点", F16)
+    draw.line((20, 154, 250, 154), fill=0)
+    y = 166
     for line in summary.get("bullets", [])[:4]:
         lines = wrap_text(draw, line, F12, 224, 2)
         for wrapped in lines:
             text(draw, (20, y), wrapped, F12)
             y += 17
         y += 4
-    box(draw, (276, 96, 112, 194))
-    band(draw, (284, 104, 94, 25), "关键词")
-    text(draw, (284, 144), "\n".join(summary.get("keywords", [])[:5]), F12)
+    box(draw, (276, 84, 112, 206))
+    band(draw, (284, 92, 94, 25), "关键词")
+    text(draw, (284, 132), "\n".join(summary.get("keywords", [])[:4]), F12)
+    draw.line((284, 204, 378, 204), fill=0)
+    text(draw, (284, 218), "待办", F12)
+    text(draw, (284, 240), "审议规划\n确认预算", F12)
     return img
 
 
@@ -255,11 +279,12 @@ def render_reminder(data: dict[str, Any]) -> Image.Image:
     user = data.get("attendee", {})
     reminder = data.get("reminder", {})
     header(draw, "GoTim ink", "4/4")
-    pass_stamp(draw, 10, 42, 380, "PERSONAL PASS", f"{user.get('name', '参会者')} / 个人提醒")
-    box(draw, (10, 96, 214, 174))
+    board_header(draw, "REMIND", "REMINDER BOARD", "ALERT")
+    status_pill(draw, (10, 84, 214, 22), f"{user.get('name', '参会者')} / 个人提醒")
+    box(draw, (10, 116, 214, 150))
     active_index = int(data.get("active_reminder_index", -1))
     for i, item in enumerate(reminder.get("items", [])[:3]):
-        y = 108 + i * 48
+        y = 126 + i * 42
         draw.rectangle((22, y, 76, y + 24), fill=0)
         text(draw, (29, y + 5), item.get("time", "--:--"), F12, 255)
         if i == active_index:
@@ -268,8 +293,9 @@ def render_reminder(data: dict[str, Any]) -> Image.Image:
         else:
             multiline(draw, (88, y + 2), item.get("title", ""), F15, 0, 122, 2, 2)
         if i < 2:
-            draw.line((22, y + 38, 210, y + 38), fill=0)
-    qr_card(img, draw, (242, 86, 146, 204), "提醒设置", "扫码修改", reminder.get("url", "https://msh.cn/r"))
+            draw.line((22, y + 36, 210, y + 36), fill=0)
+    kiosk_qr_card(img, draw, (242, 96, 146, 194), "提醒设置", "扫码修改", reminder.get("url", "https://msh.cn/r"))
+    text(draw, (18, 276), "到点自动高亮，更多内容可在设备上滚动查看", F12)
     return img
 
 

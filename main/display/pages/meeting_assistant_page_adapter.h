@@ -29,10 +29,10 @@ public:
 private:
     void UpdateContent();
     void ScrollBy(int delta_y);
-    void BuildAgendaPage();
+    void BuildAgendaBoardPage();
     void BuildMaterialsPage();
-    void BuildSummaryPage();
-    void BuildReminderPage();
+    void BuildInsightBoardPage();
+    void BuildReminderBoardPage();
 
     bool built_ = false;
     size_t page_index_ = 0;
