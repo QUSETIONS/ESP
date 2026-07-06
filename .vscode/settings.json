@@ -1,0 +1,13 @@
+{
+  "idf.pythonInstallPath": "/usr/bin/python3",
+  "idf.espIdfPath": "/home/xym/esp/v5.5.2/esp-idf",
+  "idf.toolsPath": "/home/xym/.espressif",
+  "clangd.path": "/home/xym/.espressif/tools/esp-clang/esp-19.1.2_20250312/esp-clang/bin/clangd",
+  "clangd.arguments": [
+    "--background-index",
+    "--query-driver=**",
+    "--compile-commands-dir=/home/xym/esp/xiaozhi-esp32-2.1.0/build"
+  ],
+  "remote.autoForwardPortsFallback": 0,
+  "idf.currentSetup": "/home/xym/esp/v5.5.2/esp-idf"
+}

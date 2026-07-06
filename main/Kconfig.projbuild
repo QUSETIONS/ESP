@@ -1,0 +1,29 @@
+menu "Xiaozhi Assistant"
+
+config BOARD_TYPE_ZECTRIX_S3_EPAPER_4_2
+    bool "zectrix-s3-epaper-4.2 FT firmware"
+    default y
+    depends on IDF_TARGET_ESP32S3
+    help
+        This local repository has been reduced to a single FT-only firmware
+        for the zectrix-s3-epaper-4.2 board.
+
+config MEETING_ASSISTANT_URL
+    string "Meeting assistant JSON URL"
+    default "http://172.20.10.10:8787/meeting/current"
+    help
+        HTTP endpoint returning the meeting JSON payload.
+
+config DEFAULT_WIFI_SSID
+    string "Default Wi-Fi SSID"
+    default ""
+    help
+        Optional preset Wi-Fi SSID. Leave empty to use captive portal/NVS credentials.
+
+config DEFAULT_WIFI_PASSWORD
+    string "Default Wi-Fi password"
+    default ""
+    help
+        Optional preset Wi-Fi password.
+
+endmenu

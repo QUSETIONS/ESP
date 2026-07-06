@@ -1,0 +1,114 @@
+{
+  "meeting_id": "demo-20260705",
+  "updated_at": "2026-07-05T09:35:00+08:00",
+  "home": {
+    "title": "极趣实验室 Note",
+    "date_label": "07/05 周日",
+    "month": "JUL",
+    "day": "05",
+    "weekday": "周日"
+  },
+  "device_status": {
+    "network": "离线",
+    "mode": "本地",
+    "nfc": "Ready",
+    "battery": "--"
+  },
+  "attendee": {
+    "id": "guest-001",
+    "name": "张军先生",
+    "role": "参会嘉宾"
+  },
+  "current_agenda_index": 0,
+  "agenda": [
+    {
+      "time": "09:30",
+      "title": "理事会工作报告",
+      "speaker": "孙晓华 主席",
+      "note": "剩余 20 分钟"
+    },
+    {
+      "time": "10:30",
+      "title": "审议与现场表决",
+      "speaker": "秘书处",
+      "note": "准备投票"
+    },
+    {
+      "time": "11:30",
+      "title": "午餐与交流",
+      "speaker": "",
+      "note": "一层宴会厅"
+    },
+    {
+      "time": "14:00",
+      "title": "分论坛：产业协同",
+      "speaker": "圆桌嘉宾",
+      "note": "分会场 B"
+    },
+    {
+      "time": "15:30",
+      "title": "集体合影",
+      "speaker": "",
+      "note": "签到墙"
+    }
+  ],
+  "materials": {
+    "label": "PPT / PDF",
+    "url": "https://msh.cn/m"
+  },
+  "interaction": {
+    "label": "提交问题",
+    "url": "https://msh.cn/q"
+  },
+  "summary": {
+    "title": "09:35 AI 摘要",
+    "bullets": [
+      "发展规划强调未来五年方向。",
+      "巩固基础性，深化公益性。",
+      "提升专业性，增强国际性。",
+      "打造特色品牌，稳中求进。",
+      "建立项目跟踪和年度复盘。"
+    ],
+    "keywords": [
+      "公益性",
+      "专业性",
+      "国际合作",
+      "品牌建设"
+    ]
+  },
+  "reminder": {
+    "url": "https://msh.cn/r",
+    "items": [
+      {
+        "time": "11:30",
+        "title": "午餐与交流"
+      },
+      {
+        "time": "14:00",
+        "title": "分论坛"
+      },
+      {
+        "time": "15:30",
+        "title": "集体合影"
+      }
+    ]
+  },
+  "lab_features": [
+    {
+      "title": "会议助手",
+      "subtitle": "议程 / 资料 / AI 要点 / 提醒"
+    },
+    {
+      "title": "资料二维码",
+      "subtitle": "资料下载与现场提问"
+    },
+    {
+      "title": "个人提醒",
+      "subtitle": "日程和会后任务"
+    },
+    {
+      "title": "系统状态",
+      "subtitle": "电量 / NFC / 屏幕状态"
+    }
+  ]
+}
