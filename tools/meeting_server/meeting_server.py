@@ -1049,22 +1049,22 @@ class MeetingHandler(BaseHTTPRequestHandler):
             return
         base_version = payload.pop("base_version", None)
         store = self.get_note_store()
-        previous_version = int(store.read().get("version", 0))
         try:
             if action == "create":
-                snapshot = store.create(payload, base_version)
+                result = store.create_with_result(payload, base_version)
             elif action == "patch":
-                snapshot = store.patch(note_id or "", payload, base_version)
+                result = store.patch_with_result(note_id or "", payload, base_version)
             elif action == "delete":
-                snapshot = store.delete(note_id or "", base_version)
+                result = store.delete_with_result(note_id or "", base_version)
             else:
-                snapshot = store.reorder(payload.get("ids"), base_version)
+                result = store.reorder_with_result(payload.get("ids"), base_version)
         except (NoteValidationError, VersionConflictError, KeyError) as error:
             self.send_note_error(error)
             return
 
+        snapshot = result.snapshot
         version = int(snapshot.get("version", 0))
-        if version != previous_version:
+        if result.changed:
             self.get_realtime_manager().broker.publish("notes", version, snapshot)
 
         response = {"ok": True, "version": version, "data": snapshot}

@@ -8,6 +8,7 @@ import tempfile
 import threading
 import uuid
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,12 @@ class VersionConflictError(ValueError):
         super().__init__(f"base version is stale; current version is {self.version}")
 
 
+@dataclass(frozen=True)
+class MutationResult:
+    snapshot: dict
+    changed: bool
+
+
 class VersionedNoteStore:
     def __init__(self, path: Path, clock: Callable[[], Any] | None = None):
         self.path = Path(path)
@@ -44,11 +51,14 @@ class VersionedNoteStore:
 
     def read(self) -> dict:
         with self._lock:
-            if not self.path.exists():
-                return {"version": 0, "notes": []}
-            return copy.deepcopy(json.loads(self.path.read_text(encoding="utf-8")))
+            return self._read_unlocked()
 
     def create(self, fields: Mapping[str, Any], base_version: int | None = None) -> dict:
+        return self.create_with_result(fields, base_version).snapshot
+
+    def create_with_result(
+        self, fields: Mapping[str, Any], base_version: int | None = None
+    ) -> MutationResult:
         values = self._validated_fields(fields, allow_order=True)
 
         def apply(candidate: dict) -> None:
@@ -70,6 +80,11 @@ class VersionedNoteStore:
         return self._mutate(apply, base_version)
 
     def patch(self, note_id: str, fields: Mapping[str, Any], base_version: int | None = None) -> dict:
+        return self.patch_with_result(note_id, fields, base_version).snapshot
+
+    def patch_with_result(
+        self, note_id: str, fields: Mapping[str, Any], base_version: int | None = None
+    ) -> MutationResult:
         values = self._validated_fields(fields, allow_order=True)
 
         def apply(candidate: dict) -> None:
@@ -93,6 +108,11 @@ class VersionedNoteStore:
         return self._mutate(apply, base_version)
 
     def delete(self, note_id: str, base_version: int | None = None) -> dict:
+        return self.delete_with_result(note_id, base_version).snapshot
+
+    def delete_with_result(
+        self, note_id: str, base_version: int | None = None
+    ) -> MutationResult:
         def apply(candidate: dict) -> None:
             note = self._find_note(candidate, note_id)
             candidate["notes"].remove(note)
@@ -101,6 +121,11 @@ class VersionedNoteStore:
         return self._mutate(apply, base_version)
 
     def reorder(self, ids: Sequence[str], base_version: int | None = None) -> dict:
+        return self.reorder_with_result(ids, base_version).snapshot
+
+    def reorder_with_result(
+        self, ids: Sequence[str], base_version: int | None = None
+    ) -> MutationResult:
         if isinstance(ids, (str, bytes)) or not isinstance(ids, Sequence):
             raise NoteValidationError("ids must be an ordered list of note IDs")
         requested_ids = list(ids)
@@ -118,14 +143,14 @@ class VersionedNoteStore:
 
         return self._mutate(apply, base_version)
 
-    def _mutate(self, apply: Callable[[dict], None], base_version: int | None) -> dict:
+    def _mutate(self, apply: Callable[[dict], None], base_version: int | None) -> MutationResult:
         with self._lock:
-            current = self.read()
+            current = self._read_unlocked()
             self._check_base_version(current, base_version)
             candidate = copy.deepcopy(current)
             apply(candidate)
             if candidate == current:
-                return copy.deepcopy(current)
+                return MutationResult(copy.deepcopy(current), False)
 
             timestamp = self._timestamp()
             previous_notes = {note["id"]: note for note in current.get("notes", [])}
@@ -136,7 +161,12 @@ class VersionedNoteStore:
             candidate["version"] = int(current.get("version", 0)) + 1
             candidate["updated_at"] = timestamp
             self._write(candidate)
-            return copy.deepcopy(candidate)
+            return MutationResult(copy.deepcopy(candidate), True)
+
+    def _read_unlocked(self) -> dict:
+        if not self.path.exists():
+            return {"version": 0, "notes": []}
+        return copy.deepcopy(json.loads(self.path.read_text(encoding="utf-8")))
 
     def _write(self, payload: dict) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
