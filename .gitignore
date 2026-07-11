@@ -10,4 +10,9 @@ __pycache__/
 managed_components/**/__pycache__/
 tools/ui_preview/server.log
 tools/ui_preview/out/index.html
+tools/meeting_server/state/
 output/
+.env
+sdkconfig.old
+tools/meeting_server/recordings/
+*.log
