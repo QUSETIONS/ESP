@@ -50,3 +50,44 @@ def test_lab_and_meeting_remove_dense_console_language():
     assert "SCAN DESK" not in sources
     assert "AI CONSOLE" not in sources
     assert "ALERT DESK" not in sources
+
+
+def test_frontend_uses_sticky_note_and_plugin_drawer_language():
+    firmware_home = read("main/display/pages/sticky_note_home_page_adapter.cc")
+    firmware_lab = read("main/display/pages/lab_features_page_adapter.cc")
+    firmware_meeting = read("main/display/pages/meeting_assistant_page_adapter.cc")
+    preview = read("tools/ui_preview/render_ui_preview.py")
+
+    assert "home_binder_rail" in preview
+    assert "home_sticky_surface" in preview
+    assert "MakeHomeBinderRail" in firmware_home
+    assert "MakeHomeStickySurface" in firmware_home
+
+    assert "lab_plugin_drawer" in preview
+    assert "MakeLabPluginDrawer" in firmware_lab
+    assert "MakeDrawerFeatureRow" in firmware_lab
+
+    assert "meeting_scroll_canvas" in preview
+    assert "BuildScrollCanvas" in firmware_meeting
+    assert "kScrollableContentHeight" in firmware_meeting
+
+
+
+def test_home_and_lab_share_named_ui_system_primitives():
+    firmware_home = read("main/display/pages/sticky_note_home_page_adapter.cc")
+    firmware_lab = read("main/display/pages/lab_features_page_adapter.cc")
+    preview = read("tools/ui_preview/render_ui_preview.py")
+
+    assert "MakeBindingRail" in firmware_home
+    assert "MakeCurrentNoteStage" in firmware_home
+    assert "MakeLabToolDrawer" in firmware_lab
+    assert "make_binding_rail" in preview
+    assert "current_note_stage" in preview
+    assert "lab_tool_drawer" in preview
+
+
+def test_firmware_home_rail_respects_bottom_safety_area():
+    firmware_home = read("main/display/pages/sticky_note_home_page_adapter.cc")
+
+    assert "kBottomSafeHeight = 12" in firmware_home
+    assert "kPageHeight - kBottomSafeHeight - y" in firmware_home

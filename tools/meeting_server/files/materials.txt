@@ -1,0 +1,6 @@
+GoTim Ink demo materials
+
+This local file is served by tools/meeting_server/meeting_server.py.
+Point the e-paper materials QR code to:
+
+http://<computer-ip>:8787/files/materials.txt

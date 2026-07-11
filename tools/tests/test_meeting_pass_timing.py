@@ -24,7 +24,7 @@ def test_board_has_online_timed_meeting_scheduler():
     source = read("main/boards/zectrix-s3-epaper-4.2/zectrix-s3-epaper-4.2.cc")
 
     assert "kMeetingTimedUpdateIntervalMs" in source
-    assert "kMeetingDataRefreshIntervalMs" in source
+    assert "kMeetingVersionCheckIntervalMs" in source
     assert "TimedMeetingTaskEntry" in source
     assert "TimedMeetingTask()" in source
     assert "ParseAgendaStartMinutes" in source

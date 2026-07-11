@@ -74,6 +74,23 @@
       "专业性",
       "国际合作",
       "品牌建设"
+    ],
+    "metrics": [
+      {
+        "label": "年度预算",
+        "value": "320万",
+        "delta": "+18%"
+      },
+      {
+        "label": "合作单位",
+        "value": "26家",
+        "delta": "+6"
+      },
+      {
+        "label": "待表决",
+        "value": "3项",
+        "delta": "10:30"
+      }
     ]
   },
   "reminder": {
@@ -109,6 +126,43 @@
     {
       "title": "系统状态",
       "subtitle": "电量 / NFC / 屏幕状态"
+    }
+  ],
+  "badge": {
+    "label": "会后身份 Badge",
+    "footer": "会后可带走设备作为身份牌"
+  },
+  "live": {
+    "speaker": "孙晓华 主席",
+    "topic": "未来五年发展方向",
+    "status": "09:35 正在发言",
+    "remote_update": "母机同步 42 台设备"
+  },
+  "desktop_tasks": [
+    {
+      "time": "17:00",
+      "title": "确认客户反馈",
+      "owner": "张晨钰"
+    },
+    {
+      "time": "明早",
+      "title": "发送会议纪要",
+      "owner": "Jasper"
+    },
+    {
+      "time": "周五",
+      "title": "客户回访",
+      "owner": "项目组"
+    }
+  ],
+  "health_reminders": [
+    {
+      "time": "10:50",
+      "title": "起身活动 3 分钟"
+    },
+    {
+      "time": "15:00",
+      "title": "喝水提醒"
     }
   ]
 }

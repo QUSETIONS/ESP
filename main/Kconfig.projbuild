@@ -26,4 +26,12 @@ config DEFAULT_WIFI_PASSWORD
     help
         Optional preset Wi-Fi password.
 
+config BLE_MEETING_DEVICE_NAME
+    string "BLE meeting-sync device name"
+    default "GoTim-ink"
+    help
+        GAP device name advertised by the NimBLE meeting-sync peripheral.
+        The WeChat mini-program scans for this name (or the service UUID) to
+        find the device.
+
 endmenu

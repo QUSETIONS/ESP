@@ -1,0 +1,118 @@
+page {
+  background: #f4f1e8;
+  color: #101820;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+}
+
+.page {
+  padding: 24rpx;
+}
+
+.status {
+  background: #101820;
+  border-radius: 16rpx;
+  color: #fff;
+  padding: 28rpx;
+  margin-bottom: 24rpx;
+}
+
+.status-title {
+  display: block;
+  font-size: 36rpx;
+  font-weight: 700;
+}
+
+.status-sub {
+  display: block;
+  color: #c8d4d8;
+  font-size: 24rpx;
+  margin-top: 8rpx;
+}
+
+.panel {
+  background: #fffdf7;
+  border: 2rpx solid #d8d0bd;
+  border-radius: 16rpx;
+  padding: 20rpx;
+  margin-bottom: 24rpx;
+}
+
+.row {
+  display: flex;
+  gap: 16rpx;
+}
+
+.top-gap {
+  margin-top: 20rpx;
+}
+
+button {
+  border-radius: 10rpx;
+  font-size: 28rpx;
+  line-height: 76rpx;
+}
+
+.primary {
+  background: #1f6f5b;
+  color: #fff;
+}
+
+.secondary {
+  background: #e6dfcf;
+  color: #101820;
+}
+
+.wide {
+  margin-top: 20rpx;
+}
+
+.device {
+  border-top: 1rpx solid #e2dac8;
+  display: flex;
+  flex-direction: column;
+  gap: 6rpx;
+  padding: 18rpx 0;
+}
+
+.device text:first-child {
+  font-size: 30rpx;
+  font-weight: 700;
+}
+
+.device text:last-child {
+  color: #68706a;
+  font-size: 22rpx;
+  word-break: break-all;
+}
+
+.label {
+  color: #4c554f;
+  display: block;
+  font-size: 24rpx;
+  margin: 14rpx 0 8rpx;
+}
+
+input,
+textarea {
+  background: #f7f4ec;
+  border: 1rpx solid #d8d0bd;
+  border-radius: 10rpx;
+  box-sizing: border-box;
+  font-size: 26rpx;
+  padding: 16rpx;
+  width: 100%;
+}
+
+textarea {
+  height: 360rpx;
+  line-height: 1.45;
+}
+
+.log {
+  color: #56605b;
+  display: flex;
+  flex-direction: column;
+  font-size: 22rpx;
+  gap: 8rpx;
+  padding: 0 8rpx 24rpx;
+}

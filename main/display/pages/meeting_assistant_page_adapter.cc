@@ -12,26 +12,35 @@ namespace {
 
 constexpr lv_coord_t kPageWidth = 400;
 constexpr lv_coord_t kPageHeight = 300;
-constexpr lv_coord_t kHeaderHeight = 34;
+constexpr lv_coord_t kHeaderHeight = 32;
 constexpr lv_coord_t kFooterHeight = 16;
-constexpr lv_coord_t kMargin = 10;
-constexpr lv_coord_t kContentHeight = kPageHeight - kHeaderHeight - kFooterHeight;
+constexpr lv_coord_t kBottomSafeHeight = 12;
+constexpr lv_coord_t kMargin = 12;
+constexpr lv_coord_t kTextSafePad = 16;
+// 4px spacing grid: 4 / 8 / 12 / 16 / 20 / 24 / 32
+constexpr lv_coord_t kGap = 8;
+constexpr lv_coord_t kPad = 12;
+constexpr lv_coord_t kContentHeight = kPageHeight - kHeaderHeight - kFooterHeight - kBottomSafeHeight;
+constexpr lv_coord_t kScrollableContentHeight = kContentHeight + 88;
 constexpr lv_coord_t kScrollStep = 44;
-constexpr lv_coord_t kQrQuietZone = 6;
+constexpr lv_coord_t kQrQuietZone = 12;
+constexpr lv_coord_t kQrCardWidth = 176;
+constexpr lv_coord_t kQrCardHeight = 220;
+constexpr lv_coord_t kQrCodeSize = 144;
 constexpr size_t kPageCount = 4;
 
 const char* const kTitles[kPageCount] = {
-    "GoTim ink",
-    "GoTim ink",
-    "GoTim ink",
-    "GoTim ink",
+    "会议助手",
+    "会议助手",
+    "会议助手",
+    "会议助手",
 };
 
 const char* const kFooters[kPageCount] = {
     "当前议程自动跟随时间",
-    "扫码获取资料和互动入口",
+    "扫码获取资料 / 提交问题",
     "摘要较长时可继续滚动",
-    "个人提醒到点自动高亮",
+    "扫码修改个人提醒",
 };
 
 void StylePlain(lv_obj_t* obj) {
@@ -43,17 +52,18 @@ void StylePlain(lv_obj_t* obj) {
     lv_obj_set_scrollbar_mode(obj, LV_SCROLLBAR_MODE_OFF);
 }
 
-void StyleBox(lv_obj_t* obj, lv_coord_t pad = 8) {
+// Whitespace card — no border. Separates sections by padding, not lines.
+void StyleSoftCard(lv_obj_t* obj, lv_coord_t pad) {
     lv_obj_set_style_bg_color(obj, lv_color_white(), 0);
     lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(obj, 1, 0);
-    lv_obj_set_style_border_color(obj, lv_color_black(), 0);
+    lv_obj_set_style_border_width(obj, 0, 0);
     lv_obj_set_style_radius(obj, 0, 0);
     lv_obj_set_style_pad_all(obj, pad, 0);
     lv_obj_set_scrollbar_mode(obj, LV_SCROLLBAR_MODE_OFF);
 }
 
-void StyleFilled(lv_obj_t* obj, lv_coord_t pad = 6) {
+// Filled block — emphasis.
+void StyleFilled(lv_obj_t* obj, lv_coord_t pad) {
     lv_obj_set_style_bg_color(obj, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(obj, 0, 0);
@@ -68,12 +78,20 @@ void SetFont(lv_obj_t* obj, const lv_font_t* font) {
     }
 }
 
-lv_obj_t* MakeBox(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h, lv_coord_t pad = 8) {
-    lv_obj_t* box = lv_obj_create(parent);
-    StyleBox(box, pad);
-    lv_obj_set_size(box, w, h);
-    lv_obj_align(box, LV_ALIGN_TOP_LEFT, x, y);
-    return box;
+lv_obj_t* MakeSoftCard(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h, lv_coord_t pad = 0) {
+    lv_obj_t* card = lv_obj_create(parent);
+    StyleSoftCard(card, pad);
+    lv_obj_set_size(card, w, h);
+    lv_obj_align(card, LV_ALIGN_TOP_LEFT, x, y);
+    return card;
+}
+
+lv_obj_t* MakeFilledBlock(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h, lv_coord_t pad = 0) {
+    lv_obj_t* block = lv_obj_create(parent);
+    StyleFilled(block, pad);
+    lv_obj_set_size(block, w, h);
+    lv_obj_align(block, LV_ALIGN_TOP_LEFT, x, y);
+    return block;
 }
 
 lv_obj_t* MakeLabel(lv_obj_t* parent, const char* text, lv_coord_t x, lv_coord_t y, lv_coord_t w,
@@ -97,11 +115,8 @@ lv_obj_t* MakeWrappedLabel(lv_obj_t* parent, const char* text, lv_coord_t x, lv_
 }
 
 lv_obj_t* MakeFilledLabel(lv_obj_t* parent, const char* text, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h) {
-    lv_obj_t* box = lv_obj_create(parent);
-    StyleFilled(box, 4);
-    lv_obj_set_size(box, w, h);
-    lv_obj_align(box, LV_ALIGN_TOP_LEFT, x, y);
-
+    // Filled emphasis pill for a time label.
+    lv_obj_t* box = MakeFilledBlock(parent, x, y, w, h, 0);
     lv_obj_t* label = lv_label_create(box);
     SetFont(label, &BUILTIN_TEXT_FONT);
     lv_obj_set_style_text_color(label, lv_color_white(), 0);
@@ -110,71 +125,58 @@ lv_obj_t* MakeFilledLabel(lv_obj_t* parent, const char* text, lv_coord_t x, lv_c
     return box;
 }
 
-lv_obj_t* MakeInvertedBand(lv_obj_t* parent, const char* text, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h,
-                           const lv_font_t* font = &BUILTIN_TEXT_FONT) {
-    lv_obj_t* band = lv_obj_create(parent);
-    StyleFilled(band, 0);
-    lv_obj_set_size(band, w, h);
-    lv_obj_align(band, LV_ALIGN_TOP_LEFT, x, y);
-
-    lv_obj_t* label = lv_label_create(band);
-    SetFont(label, font);
-    lv_obj_set_style_text_color(label, lv_color_white(), 0);
-    lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
-    lv_obj_set_width(label, w - 8);
-    lv_label_set_text(label, text);
-    lv_obj_align(label, LV_ALIGN_LEFT_MID, 4, 0);
-    return band;
-}
-
-void MakeDivider(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t w);
-
-void MakeDivider(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t w) {
+void MakeThinRule(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t w) {
     lv_obj_t* line = lv_obj_create(parent);
     StyleFilled(line, 0);
     lv_obj_set_size(line, w, 1);
     lv_obj_align(line, LV_ALIGN_TOP_LEFT, x, y);
 }
 
-lv_obj_t* MakeSoftSection(lv_obj_t* parent, const char* title, lv_coord_t x, lv_coord_t y, lv_coord_t w,
-                          lv_coord_t h) {
-    lv_obj_t* box = MakeBox(parent, x, y, w, h, 8);
-    MakeLabel(box, title, 0, 0, w - 18, &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
-    MakeDivider(box, 0, 28, w - 18);
-    return box;
+void MakeVerticalRule(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t h) {
+    lv_obj_t* line = lv_obj_create(parent);
+    StyleFilled(line, 0);
+    lv_obj_set_size(line, 1, h);
+    lv_obj_align(line, LV_ALIGN_TOP_LEFT, x, y);
 }
 
-void BuildKioskQrCard(lv_obj_t* parent, const char* title, const char* subtitle, const char* data,
-                      lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h, lv_coord_t qr_size) {
-    lv_obj_t* card = MakeBox(parent, x, y, w, h, kQrQuietZone);
+void BuildQrTicket(lv_obj_t* parent, const char* title, const char* subtitle, const char* data,
+                   lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h, lv_coord_t qr_size,
+                   const lv_font_t* title_font) {
+    // Open QR ticket: no heavy outer box, keep the QR quiet zone intact.
+    lv_obj_t* card = MakeSoftCard(parent, x, y, w, h, 0);
+    MakeFilledBlock(card, 4, 8, 24, 4, 0);
+    MakeThinRule(card, 4, 52, w - 8);
 
-    MakeInvertedBand(card, title, 0, 0, w - (kQrQuietZone * 2), 27, &SourceHanSansSC_Medium_slim);
-    MakeLabel(card, subtitle, 0, 35, w - (kQrQuietZone * 2), &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    lv_obj_t* title_label = lv_label_create(card);
+    SetFont(title_label, title_font);
+    lv_label_set_text(title_label, title);
+    lv_obj_set_width(title_label, w - 2 * kPad);
+    lv_label_set_long_mode(title_label, LV_LABEL_LONG_CLIP);
+    lv_obj_align(title_label, LV_ALIGN_TOP_LEFT, kPad, 16);
 
-    lv_obj_t* qr = lv_qrcode_create(card);
+    MakeLabel(card, subtitle, kPad, 40, w - 2 * kPad,
+              &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+
+    const lv_coord_t quiet_w = qr_size + 2 * kQrQuietZone;
+    lv_obj_t* quiet = MakeSoftCard(card, (w - quiet_w) / 2, h - quiet_w - kQrQuietZone,
+                                   quiet_w, quiet_w, 0);
+
+    lv_obj_t* qr = lv_qrcode_create(quiet);
     lv_qrcode_set_size(qr, qr_size);
     lv_qrcode_set_dark_color(qr, lv_color_black());
     lv_qrcode_set_light_color(qr, lv_color_white());
     lv_qrcode_update(qr, data, static_cast<uint32_t>(strlen(data)));
-    lv_obj_set_style_border_width(qr, kQrQuietZone, 0);
-    lv_obj_set_style_border_color(qr, lv_color_white(), 0);
-    lv_obj_align(qr, LV_ALIGN_BOTTOM_MID, 0, -kQrQuietZone);
+    lv_obj_center(qr);
+}
+
+void BuildKioskQrCard(lv_obj_t* parent, const char* title, const char* subtitle, const char* data,
+                      lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h, lv_coord_t qr_size) {
+    BuildQrTicket(parent, title, subtitle, data, x, y, w, h, qr_size, &BUILTIN_TEXT_FONT);
 }
 
 void BuildPrimaryQrPanel(lv_obj_t* parent, const char* title, const char* subtitle, const char* data,
-                         lv_coord_t x, lv_coord_t y) {
-    lv_obj_t* card = MakeBox(parent, x, y, 214, 198, kQrQuietZone);
-    MakeInvertedBand(card, title, 0, 0, 202, 28, &SourceHanSansSC_Medium_slim);
-    MakeLabel(card, subtitle, 0, 38, 202, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
-
-    lv_obj_t* qr = lv_qrcode_create(card);
-    lv_qrcode_set_size(qr, 132);
-    lv_qrcode_set_dark_color(qr, lv_color_black());
-    lv_qrcode_set_light_color(qr, lv_color_white());
-    lv_qrcode_update(qr, data, static_cast<uint32_t>(strlen(data)));
-    lv_obj_set_style_border_width(qr, kQrQuietZone, 0);
-    lv_obj_set_style_border_color(qr, lv_color_white(), 0);
-    lv_obj_align(qr, LV_ALIGN_BOTTOM_MID, 0, -8);
+                         lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h) {
+    BuildQrTicket(parent, title, subtitle, data, x, y, w, h, kQrCodeSize, &SourceHanSansSC_Medium_slim);
 }
 
 
@@ -209,17 +211,15 @@ void MeetingAssistantPageAdapter::Build() {
     lv_obj_set_size(screen_, kPageWidth, kPageHeight);
     StylePlain(screen_);
 
-    lv_obj_t* header = lv_obj_create(screen_);
-    StyleFilled(header, 0);
-    lv_obj_set_size(header, kPageWidth, kHeaderHeight);
-    lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
+    // Filled page header band.
+    lv_obj_t* header = MakeFilledBlock(screen_, 0, 0, kPageWidth, kHeaderHeight, 0);
 
     title_label_ = lv_label_create(header);
     SetFont(title_label_, &SourceHanSansSC_Medium_slim);
     lv_obj_set_style_text_color(title_label_, lv_color_white(), 0);
     lv_obj_set_width(title_label_, 250);
     lv_label_set_long_mode(title_label_, LV_LABEL_LONG_CLIP);
-    lv_obj_align(title_label_, LV_ALIGN_LEFT_MID, 12, 0);
+    lv_obj_align(title_label_, LV_ALIGN_LEFT_MID, kTextSafePad, 0);
 
     time_label_ = lv_label_create(header);
     SetFont(time_label_, &BUILTIN_TEXT_FONT);
@@ -230,7 +230,7 @@ void MeetingAssistantPageAdapter::Build() {
     page_label_ = lv_label_create(header);
     SetFont(page_label_, &BUILTIN_TEXT_FONT);
     lv_obj_set_style_text_color(page_label_, lv_color_white(), 0);
-    lv_obj_align(page_label_, LV_ALIGN_RIGHT_MID, -10, 0);
+    lv_obj_align(page_label_, LV_ALIGN_RIGHT_MID, -kMargin, 0);
 
     content_ = lv_obj_create(screen_);
     StylePlain(content_);
@@ -242,9 +242,10 @@ void MeetingAssistantPageAdapter::Build() {
 
     footer_label_ = lv_label_create(screen_);
     SetFont(footer_label_, &BUILTIN_TEXT_FONT);
-    lv_obj_set_width(footer_label_, kPageWidth - 20);
+    lv_obj_set_width(footer_label_, kPageWidth - 2 * kMargin);
+    lv_obj_set_height(footer_label_, kFooterHeight);
     lv_label_set_long_mode(footer_label_, LV_LABEL_LONG_CLIP);
-    lv_obj_align(footer_label_, LV_ALIGN_BOTTOM_MID, 0, -5);
+    lv_obj_align(footer_label_, LV_ALIGN_BOTTOM_MID, 0, -kBottomSafeHeight);
 
     built_ = true;
     UpdateContent();
@@ -276,6 +277,10 @@ void MeetingAssistantPageAdapter::ScrollBy(int delta_y) {
     if (next_y < 0) {
         next_y = 0;
     }
+    const int32_t max_y = kScrollableContentHeight - kContentHeight;
+    if (next_y > max_y) {
+        next_y = max_y;
+    }
     lv_obj_scroll_to_y(content_, next_y, LV_ANIM_OFF);
 }
 
@@ -301,98 +306,165 @@ void MeetingAssistantPageAdapter::SetTimeLabel(const std::string& value) {
     }
 }
 
-void MeetingAssistantPageAdapter::BuildCleanAgendaPage() {
+void MeetingAssistantPageAdapter::BuildScrollCanvas(const char* section, const char* hint) {
+    MakeLabel(content_, section, kTextSafePad, kGap, 120, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    MakeLabel(content_, hint, kPageWidth - kTextSafePad - 80, kGap + 1, 80,
+              &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    MakeThinRule(content_, kTextSafePad, kGap + 20, kPageWidth - 2 * kTextSafePad);
+}
+
+void MeetingAssistantPageAdapter::MakeMetricStrip(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t w) {
+    const lv_coord_t cell_w = w / 3;
+    for (size_t i = 0; i < meeting_data_.metric_count && i < 3; ++i) {
+        const lv_coord_t cx = static_cast<lv_coord_t>(x + i * cell_w);
+        if (i > 0) {
+            MakeVerticalRule(parent, cx - kGap, y + 4, 50);
+        }
+        MakeLabel(parent, meeting_data_.metrics[i].label.c_str(), cx, y, cell_w - kGap,
+                  &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+        MakeLabel(parent, meeting_data_.metrics[i].value.c_str(), cx, y + 16, cell_w - kGap,
+                  &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
+        MakeLabel(parent, meeting_data_.metrics[i].delta.c_str(), cx, y + 42, cell_w - kGap,
+                  &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    }
+}
+
+void MeetingAssistantPageAdapter::BuildLiveBriefingPage() {
+    BuildScrollCanvas("现场", "实时同步");
     const size_t current_index = meeting_data_.agenda_count > 0
         ? static_cast<size_t>(meeting_data_.current_agenda_index)
         : 0;
     const MeetingAgendaItem empty_item = {};
     const MeetingAgendaItem& current_item = meeting_data_.agenda_count > 0 ? meeting_data_.agenda[current_index] : empty_item;
-    std::string meta = current_item.speaker;
-    if (!current_item.note.empty()) {
-        if (!meta.empty()) {
-            meta += "  |  ";
-        }
-        meta += current_item.note;
-    }
-    lv_obj_t* hero = lv_obj_create(content_);
-    StyleFilled(hero, 10);
-    lv_obj_set_size(hero, 376, 112);
-    lv_obj_align(hero, LV_ALIGN_TOP_LEFT, 12, 14);
-    lv_obj_t* label = MakeLabel(hero, "当前议程", 2, 2, 120, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
-    lv_obj_set_style_text_color(label, lv_color_white(), 0);
-    lv_obj_t* time = MakeLabel(hero, current_item.time.empty() ? "--:--" : current_item.time.c_str(), 2, 28, 82,
-                               &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
-    lv_obj_set_style_text_color(time, lv_color_white(), 0);
-    lv_obj_t* title = MakeWrappedLabel(hero, current_item.title.c_str(), 100, 24, 220, 42,
-                                       &SourceHanSansSC_Medium_slim);
-    lv_obj_set_style_text_color(title, lv_color_white(), 0);
-    lv_obj_t* meta_label = MakeLabel(hero, meta.c_str(), 2, 86, 330, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
-    lv_obj_set_style_text_color(meta_label, lv_color_white(), 0);
 
-    lv_obj_t* next = MakeBox(content_, 12, 142, 376, 54, 8);
-    MakeLabel(next, "下一个", 0, 4, 60, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
-    if (current_index + 1 < meeting_data_.agenda_count) {
-        std::string next_text = meeting_data_.agenda[current_index + 1].time + "  " + meeting_data_.agenda[current_index + 1].title;
-        MakeLabel(next, next_text.c_str(), 76, 2, 276, &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
-    }
-    MakeLabel(content_, "向下滚动查看更多议程", 24, 220, 220, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
-}
+    const lv_coord_t x = kMargin;
+    const lv_coord_t y = 34;
+    const lv_coord_t w = kPageWidth - 2 * kMargin;
 
-void MeetingAssistantPageAdapter::BuildCleanMaterialsPage() {
-    BuildPrimaryQrPanel(content_, "资料下载", meeting_data_.materials_label.c_str(), meeting_data_.materials_url.c_str(),
-                        12, 14);
-    BuildKioskQrCard(content_, "现场提问", meeting_data_.interaction_label.c_str(), meeting_data_.interaction_url.c_str(),
-                     242, 38, 146, 162, 104);
-    MakeLabel(content_, "左侧下载材料，右侧提交现场问题。", 18, 240, 340,
+    lv_obj_t* live = MakeFilledBlock(content_, x, y, 72, 28, 0);
+    lv_obj_t* live_label = MakeLabel(live, "LIVE", kGap, 7, 52, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    lv_obj_set_style_text_color(live_label, lv_color_white(), 0);
+    MakeLabel(content_, meeting_data_.live_speaker.c_str(), x + 86, y + 2, 170,
+              &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
+    MakeLabel(content_, meeting_data_.live_topic.c_str(), x + 86, y + 28, 220,
+              &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    MakeLabel(content_, meeting_data_.live_status.c_str(), x, y + 54, 140,
+              &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    MakeLabel(content_, meeting_data_.remote_update.c_str(), x + 160, y + 54, 190,
+              &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    MakeThinRule(content_, x, y + 72, w);
+
+    MakeLabel(content_, "当前议程", x, y + 86, 64, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    MakeLabel(content_, current_item.time.empty() ? "--:--" : current_item.time.c_str(), x + 68, y + 80, 52,
+              &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    MakeLabel(content_, current_item.title.c_str(), x + 124, y + 78, w - 124,
+              &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
+
+    MakeMetricStrip(content_, x, y + 126, w);
+    MakeLabel(content_, "长按返回便利贴，短按翻页", kMargin, kContentHeight - 20, 220,
               &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
 }
 
-void MeetingAssistantPageAdapter::BuildCleanInsightPage() {
-    lv_obj_t* main = MakeSoftSection(content_, meeting_data_.summary_title.c_str(), 12, 14, 376, 164);
+void MeetingAssistantPageAdapter::BuildCleanAgendaPage() {
+    BuildLiveBriefingPage();
+}
+
+void MeetingAssistantPageAdapter::BuildCleanMaterialsPage() {
+    BuildScrollCanvas("资料", "扫码");
+    // Keep QR card positions so guard samples stay white.
+    BuildPrimaryQrPanel(content_, "资料下载", meeting_data_.materials_label.c_str(), meeting_data_.materials_url.c_str(),
+                        kTextSafePad, 28, kQrCardWidth, kQrCardHeight);
+    BuildPrimaryQrPanel(content_, "现场提问", meeting_data_.interaction_label.c_str(), meeting_data_.interaction_url.c_str(),
+                        kPageWidth - kTextSafePad - kQrCardWidth, 28, kQrCardWidth, kQrCardHeight);
+}
+
+void MeetingAssistantPageAdapter::BuildKeyPointsPage() {
+    BuildScrollCanvas("要点", "核心数据");
+    const lv_coord_t main_w = kPageWidth - 2 * kMargin;
+    lv_obj_t* main = MakeSoftCard(content_, kMargin, 34, main_w, 140, kPad);
+    MakeLabel(main, meeting_data_.summary_title.c_str(), 0, 0, main_w - 2 * kPad,
+              &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
+    MakeFilledBlock(main, 0, 22, 54, 4, 0);
+    MakeThinRule(main, 64, 24, main_w - 2 * kPad - 84);
+
     std::string bullets;
-    for (size_t i = 0; i < meeting_data_.summary_bullet_count; ++i) {
+    for (size_t i = 0; i < meeting_data_.summary_bullet_count && i < 5; ++i) {
         bullets += meeting_data_.summary_bullets[i];
-        if (i + 1 < meeting_data_.summary_bullet_count) {
+        if (i + 1 < meeting_data_.summary_bullet_count && i < 4) {
             bullets += "\n";
         }
     }
-    MakeWrappedLabel(main, bullets.c_str(), 0, 42, 348, 104, &BUILTIN_TEXT_FONT);
+    MakeWrappedLabel(main, bullets.c_str(), 0, 30, main_w - 2 * kPad, 86, &BUILTIN_TEXT_FONT);
 
-    lv_obj_t* keywords = lv_obj_create(content_);
-    StyleFilled(keywords, 8);
-    lv_obj_set_size(keywords, 376, 46);
-    lv_obj_align(keywords, LV_ALIGN_TOP_LEFT, 12, 194);
-    lv_obj_t* key_title = MakeLabel(keywords, "关键词", 0, 4, 60, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
-    lv_obj_set_style_text_color(key_title, lv_color_white(), 0);
-    std::string keyword_line;
-    for (size_t i = 0; i < meeting_data_.keyword_count && i < 3; ++i) {
-        keyword_line += meeting_data_.keywords[i];
-        if (i + 1 < meeting_data_.keyword_count && i < 2) {
-            keyword_line += " / ";
-        }
+    MakeMetricStrip(content_, kMargin, 184, main_w);
+}
+
+void MeetingAssistantPageAdapter::BuildCleanInsightPage() {
+    BuildKeyPointsPage();
+}
+
+void MeetingAssistantPageAdapter::MakeIdentityBadge(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h) {
+    lv_obj_t* badge = MakeSoftCard(parent, x, y, w, h, 0);
+    lv_obj_t* band = MakeFilledBlock(badge, 0, 0, w, 24, 0);
+    lv_obj_t* label = MakeLabel(band, meeting_data_.badge_label.c_str(), kGap, 6, w - 2 * kGap,
+                                &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    lv_obj_set_style_text_color(label, lv_color_white(), 0);
+    MakeLabel(badge, meeting_data_.attendee_name.c_str(), kPad, 38, w - 2 * kPad,
+              &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
+    MakeLabel(badge, meeting_data_.attendee_role.c_str(), kPad, 64, w - 2 * kPad,
+              &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    MakeLabel(badge, meeting_data_.attendee_id.c_str(), kPad, 74, w - 2 * kPad,
+              &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+}
+
+void MeetingAssistantPageAdapter::MakeTaskList(lv_obj_t* parent, lv_coord_t x, lv_coord_t y) {
+    MakeLabel(parent, "桌面任务", x, y, 80, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    for (size_t i = 0; i < meeting_data_.desktop_task_count && i < 2; ++i) {
+        const lv_coord_t row_y = static_cast<lv_coord_t>(y + 18 + i * 26);
+        MakeLabel(parent, meeting_data_.desktop_tasks[i].time.c_str(), x, row_y, 44,
+                  &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+        MakeLabel(parent, meeting_data_.desktop_tasks[i].title.c_str(), x + 48, row_y - 2, 120,
+                  &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
     }
-    lv_obj_t* key_body = MakeLabel(keywords, keyword_line.c_str(), 74, 4, 260, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
-    lv_obj_set_style_text_color(key_body, lv_color_white(), 0);
+}
+
+void MeetingAssistantPageAdapter::MakeHealthReminderList(lv_obj_t* parent, lv_coord_t x, lv_coord_t y) {
+    MakeLabel(parent, "健康提醒", x, y, 80, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    for (size_t i = 0; i < meeting_data_.health_reminder_count && i < 2; ++i) {
+        const lv_coord_t row_y = static_cast<lv_coord_t>(y + 18 + i * 24);
+        MakeLabel(parent, meeting_data_.health_reminders[i].time.c_str(), x, row_y, 44,
+                  &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+        MakeLabel(parent, meeting_data_.health_reminders[i].title.c_str(), x + 48, row_y - 2, 120,
+                  &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    }
+}
+
+void MeetingAssistantPageAdapter::BuildBadgeReminderPage() {
+    BuildScrollCanvas("Badge", "任务 / 健康");
+    MakeIdentityBadge(content_, kMargin, 34, 176, 90);
+    MakeTaskList(content_, kMargin, 132);
+    MakeHealthReminderList(content_, kMargin, 188);
+    BuildKioskQrCard(content_, "提醒设置", "扫码修改", meeting_data_.reminder_url.c_str(),
+                     208, 28, kQrCardWidth, kQrCardHeight, kQrCodeSize);
+
+    lv_obj_t* list = MakeSoftCard(content_, kMargin, 292, 180, 120, kPad);
+    MakeLabel(list, "会议提醒", 0, 0, 80, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    for (size_t i = 0; i < meeting_data_.reminder_count && i < 3; ++i) {
+        const lv_coord_t y = static_cast<lv_coord_t>(22 + i * 30);
+        const bool active = meeting_data_.active_reminder_index == static_cast<int>(i);
+        if (active) {
+            MakeFilledLabel(list, meeting_data_.reminders[i].time.c_str(), 0, y, 56, 24);
+        } else {
+            MakeLabel(list, meeting_data_.reminders[i].time.c_str(), 0, y + 4, 56,
+                      &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+        }
+        MakeLabel(list, meeting_data_.reminders[i].title.c_str(), 68, y + 4, 92,
+                  &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
+    }
 }
 
 void MeetingAssistantPageAdapter::BuildCleanReminderPage() {
-    std::string title = meeting_data_.attendee_name + "  个人提醒";
-    lv_obj_t* list = MakeSoftSection(content_, title.c_str(), 12, 14, 220, 176);
-    for (size_t i = 0; i < meeting_data_.reminder_count && i < 3; ++i) {
-        const lv_coord_t y = static_cast<lv_coord_t>(42 + i * 36);
-        const bool active = meeting_data_.active_reminder_index == static_cast<int>(i);
-        if (active) {
-            MakeFilledLabel(list, meeting_data_.reminders[i].time.c_str(), 0, y, 54, 24);
-        } else {
-            MakeBox(list, 0, y, 54, 24, 0);
-            MakeLabel(list, meeting_data_.reminders[i].time.c_str(), 8, y + 4, 42, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
-        }
-        MakeLabel(list, meeting_data_.reminders[i].title.c_str(), 68, y + 4, 120,
-                  &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
-    }
-
-    BuildKioskQrCard(content_, "提醒设置", "扫码修改", meeting_data_.reminder_url.c_str(), 250, 34, 138, 166, 100);
-    MakeLabel(content_, "到点自动高亮，可滚动查看更多", 18, 240, 260, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    BuildBadgeReminderPage();
 }
 
 void MeetingAssistantPageAdapter::UpdateContent() {

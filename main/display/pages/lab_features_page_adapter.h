@@ -28,6 +28,7 @@ public:
 private:
     void UpdateContent();
     lv_obj_t* MakeLabHeroCard(int index, const char* title, const char* subtitle, lv_coord_t y);
+    lv_obj_t* MakeDrawerFeatureRow(int index, const char* title, const char* subtitle, lv_coord_t y);
     lv_obj_t* MakeSimpleFeatureTile(int index, const char* title, const char* subtitle, lv_coord_t x, lv_coord_t y);
 
     bool built_ = false;

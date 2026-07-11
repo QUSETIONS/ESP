@@ -1,0 +1,48 @@
+<view class="page">
+  <view class="status">
+    <text class="status-title">{{statusText}}</text>
+    <text class="status-sub">{{connected ? deviceName : "GoTim-ink"}}</text>
+  </view>
+
+  <view class="panel">
+    <view class="row">
+      <button class="primary" bindtap="startScan">扫描设备</button>
+      <button class="secondary" bindtap="stopScan">停止</button>
+    </view>
+    <block wx:for="{{devices}}" wx:key="deviceId">
+      <view class="device" data-id="{{item.deviceId}}" data-name="{{item.name}}" bindtap="connectDevice">
+        <text>{{item.name || "GoTim-ink"}}</text>
+        <text>{{item.deviceId}}</text>
+      </view>
+    </block>
+  </view>
+
+  <view class="panel">
+    <text class="label">Wi-Fi SSID</text>
+    <input value="{{ssid}}" bindinput="onSsidInput" placeholder="2.4GHz Wi-Fi 或 iPhone 热点" />
+    <text class="label">Wi-Fi 密码</text>
+    <input value="{{password}}" password bindinput="onPasswordInput" placeholder="密码可为空" />
+    <text class="label">会议服务地址</text>
+    <input value="{{meetingUrl}}" bindinput="onMeetingUrlInput" placeholder="http://手机IP:8787/meeting/current" />
+    <button class="primary wide" disabled="{{!connected}}" bindtap="sendProvision">发送配网</button>
+  </view>
+
+  <view class="panel">
+    <text class="label">演示会议 JSON</text>
+    <textarea value="{{meetingJson}}" bindinput="onMeetingJsonInput" maxlength="-1" />
+    <text class="label">本地服务端</text>
+    <input value="{{serverUrl}}" bindinput="onServerUrlInput" placeholder="http://手机或电脑IP:8787" />
+    <view class="row top-gap">
+      <button class="secondary" bindtap="fetchMeetingFromServer">拉取服务端</button>
+      <button class="secondary" bindtap="syncMeetingToServer">同步服务端</button>
+      <button class="secondary" bindtap="sendTranscriptDemo">模拟摘要</button>
+    </view>
+    <button class="primary wide" disabled="{{!connected}}" bindtap="sendMeeting">发送会议到设备</button>
+  </view>
+
+  <view class="log">
+    <block wx:for="{{logs}}" wx:key="*this">
+      <text>{{item}}</text>
+    </block>
+  </view>
+</view>

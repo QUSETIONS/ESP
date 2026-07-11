@@ -347,6 +347,8 @@ EDITOR_HTML = r"""<!doctype html>
       color: var(--red);
     }
 
+    @media (max-width: 700px) { .notesLayout { grid-template-columns: 1fr; } }
+
     @media (max-width: 860px) {
       .topbar,
       .layout,
@@ -395,6 +397,7 @@ EDITOR_HTML = r"""<!doctype html>
       <div id="status" class="status">正在读取会议数据...</div>
     </header>
 
+    <nav><button id="notesTab" onclick="showNotes()">便签</button></nav>
     <section class="layout">
       <div class="stack">
         <section class="panel">
@@ -530,8 +533,8 @@ EDITOR_HTML = r"""<!doctype html>
         </section>
       </aside>
     </section>
+    <section id="notesView" hidden><div class="notesLayout"><div id="notesList"></div><p id="notesListEmpty">暂无便签</p><div><p id="noteEditorEmpty">请选择便签</p><form id="noteEditor" onsubmit="saveNote(event)"><input id="noteTitle"><span id="noteTitleBytes"></span><textarea id="noteBody"></textarea><span id="noteBodyBytes"></span><input id="noteCompleted" type="checkbox"><input id="noteRemindAt" type="datetime-local"><div id="noteError"></div><button id="saveNoteButton">保存</button><button id="deleteNoteButton" type="button" onclick="deleteNote()">删除</button><button id="reloadStaleNote" type="button" onclick="reloadSelectedNote()">重载</button></form><button id="newNote" onclick="selectNote(null)">新建</button></div></div></section>
   </main>
-
   <script>
     let currentMeeting = {};
     const statusEl = document.getElementById("status");
@@ -539,7 +542,9 @@ EDITOR_HTML = r"""<!doctype html>
     let mediaStream = null;
     let recordingSessionId = null;
     let recordingSequence = 0;
-    let eventSource = null;
+    let eventSource = null, notesState={version:0,notes:[]}, selectedNoteId=null, noteFormDirty=false;
+    const MAX_NOTE_TITLE_BYTES = 48, MAX_NOTE_BODY_BYTES = 384;
+    function showNotes(){document.getElementById("notesView").hidden=false;loadNotes();}
 
     function setRecordingButtons(state) {
       document.getElementById("startRecording").disabled = state !== "idle";
@@ -610,6 +615,7 @@ EDITOR_HTML = r"""<!doctype html>
       if (eventSource) eventSource.close();
       eventSource = new EventSource("/api/events");
       ["transcript", "summary", "status"].forEach((name) => eventSource.addEventListener(name, () => loadMeeting()));
+      eventSource.addEventListener("notes", () => loadNotes({preserveDirty: true}));
       eventSource.onerror = () => setStatus("实时连接中断，正在自动重连", true);
     }
 
@@ -626,11 +632,26 @@ EDITOR_HTML = r"""<!doctype html>
       });
       const payload = await response.json();
       if (!response.ok || payload.ok === false) {
-        throw new Error(payload.error || `HTTP ${response.status}`);
+        const error = new Error(payload.error || `HTTP ${response.status}`);
+        error.status = response.status;
+        error.payload = payload;
+        throw error;
       }
       return payload;
     }
 
+    function setNoteError(message=""){document.getElementById("noteError").textContent=message;}
+    function noteSize(v){return new TextEncoder().encode(v).length;}
+    function validateNoteForm(){if(noteSize(noteTitle.value)>MAX_NOTE_TITLE_BYTES||noteSize(noteBody.value)>MAX_NOTE_BODY_BYTES)throw new Error("超过 UTF-8 字节限制");}
+    function applyNotesSnapshot(data,preserveDirty=false){notesState=data;renderNotes();if (!preserveDirty || !noteFormDirty){const n=data.notes.find(x=>x.id===selectedNoteId);if(n)selectNote(n.id);}}
+    async function loadNotes({preserveDirty=false}={}){try{applyNotesSnapshot(await fetchJson("/notes"),preserveDirty);}catch(error){setNoteError(error.message);}}
+    function renderNotes(){notesListEmpty.hidden=!!notesState.notes.length;notesList.innerHTML=notesState.notes.map((n,i)=>`<div><button onclick="selectNote('${n.id}')">${escapeHtml(n.title||"无标题")}</button><button title="上移" onclick="moveNote('${n.id}',-1)">↑</button><button title="下移" onclick="moveNote('${n.id}',1)">↓</button><button title="删除" onclick="deleteNote('${n.id}')">×</button><button onclick="toggleNote('${n.id}')">完成</button></div>`).join("");}
+    function selectNote(id){selectedNoteId=id;const n=notesState.notes.find(x=>x.id===id)||{};noteTitle.value=n.title||"";noteBody.value=n.body||"";noteCompleted.checked=!!n.completed;noteRemindAt.value=n.remind_at?n.remind_at.slice(0,16):"";noteFormDirty=false;}
+    async function saveNote(e){e.preventDefault();try{validateNoteForm();const body=JSON.stringify({title:noteTitle.value,body:noteBody.value,completed:noteCompleted.checked,remind_at:noteRemindAt.value?new Date(noteRemindAt.value).toISOString():null,base_version:notesState.version});const p=await fetchJson(selectedNoteId?`/notes/${selectedNoteId}`:"/notes",{method: selectedNoteId ? "PATCH" : "POST",body});selectedNoteId=p.note?.id||selectedNoteId;applyNotesSnapshot(p.data);}catch(error){if(error.status === 409){applyNotesSnapshot(error.payload.data, true);}setNoteError(error.message);}}
+    async function toggleNote(id){const n=notesState.notes.find(x=>x.id===id);const p=await fetchJson(`/notes/${id}`,{method:"PATCH",body:JSON.stringify({completed:!n.completed,base_version:notesState.version})});applyNotesSnapshot(p.data,true);}
+    async function deleteNote(id=selectedNoteId){if(!id||!window.confirm("删除？"))return;const p=await fetchJson(`/notes/${id}`,{method: "DELETE", body:JSON.stringify({base_version:notesState.version})});applyNotesSnapshot(p.data);}
+    async function moveNote(id,d){const ids=notesState.notes.map(n=>n.id),a=ids.indexOf(id),b=a+d;if(b<0||b>=ids.length)return;[ids[a],ids[b]]=[ids[b],ids[a]];const p=await fetchJson("/notes/reorder",{method: "PUT", body:JSON.stringify({ids,base_version:notesState.version})});applyNotesSnapshot(p.data,true);}
+    function reloadSelectedNote(){noteFormDirty=false;applyNotesSnapshot(notesState);}
     function pretty(value) {
       return JSON.stringify(value || [], null, 2);
     }
@@ -847,6 +868,7 @@ EDITOR_HTML = r"""<!doctype html>
       });
     });
 
+    ["noteTitle","noteBody","noteCompleted","noteRemindAt"].forEach(id=>document.getElementById(id).addEventListener("input",()=>{noteFormDirty = true;}));
     setRecordingButtons("idle");
     connectEvents();
     loadMeeting();

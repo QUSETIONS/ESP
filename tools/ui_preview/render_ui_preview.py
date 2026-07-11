@@ -15,6 +15,19 @@ PROJECT_ROOT = ROOT.parents[1]
 DEFAULT_DATA = PROJECT_ROOT / "tools" / "meeting_data" / "meeting_current.json"
 OUT = ROOT / "out"
 W, H = 400, 300
+BOTTOM_SAFE_H = 12
+
+# 4px spacing grid: 4 / 8 / 12 / 16 / 20 / 24 / 32
+SP_4, SP_8, SP_12, SP_16, SP_20, SP_24, SP_32 = 4, 8, 12, 16, 20, 24, 32
+
+# Safe-area margins (keep e-paper edges clean)
+MARGIN = 12
+HEADER_H = 32
+TEXT_SAFE_PAD = 16
+QR_QUIET_ZONE = 12
+QR_CARD_W = 176
+QR_CARD_H = 220
+QR_CODE_SIZE = 144
 
 
 def load_data(path: Path) -> dict[str, Any]:
@@ -36,13 +49,14 @@ def font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.Im
     return ImageFont.load_default()
 
 
+# Type scale: header 18, section 14, body 12, note 10
 F10 = font(10)
 F12 = font(12)
 F14 = font(14)
-F15 = font(15)
 F16 = font(16)
 F18 = font(18, True)
 F20 = font(20, True)
+F22 = font(22, True)
 
 
 def canvas() -> tuple[Image.Image, ImageDraw.ImageDraw]:
@@ -76,291 +90,517 @@ def wrap_text(draw: ImageDraw.ImageDraw, value: str, fnt, max_width: int, max_li
 
 
 def multiline(draw: ImageDraw.ImageDraw, xy, value: str, fnt=F12, fill=0, max_width: int = 120,
-              max_lines: int = 2, line_gap: int = 4) -> None:
+              max_lines: int = 2, line_gap: int = 4) -> int:
+    """Render wrapped text, return total height consumed."""
     x, y = xy
+    line_h = fnt.size + line_gap
     for idx, line in enumerate(wrap_text(draw, value, fnt, max_width, max_lines)):
-        text(draw, (x, y + idx * (fnt.size + line_gap)), line, fnt, fill)
+        text(draw, (x, y + idx * line_h), line, fnt, fill)
+    return len(wrap_text(draw, value, fnt, max_width, max_lines)) * line_h
 
 
 def fit_text(value: str, limit: int) -> str:
     return value if len(value) <= limit else value[: max(0, limit - 1)] + "…"
 
 
+# ---------------------------------------------------------------------------
+# Layout primitives — emphasis via fill blocks and whitespace, not thin lines.
+# ---------------------------------------------------------------------------
+
 def header(draw: ImageDraw.ImageDraw, title: str, right: str) -> None:
-    draw.rectangle((0, 0, W - 1, 31), fill=0)
-    text(draw, (12, 5), fit_text(title, 18), F16, 255)
-    text(draw, (W - 12 - int(draw.textlength(right, font=F12)), 8), right, F12, 255)
+    """Filled page header band. Title left, meta right, both reversed on black."""
+    draw.rectangle((0, 0, W - 1, HEADER_H - 1), fill=0)
+    text(draw, (TEXT_SAFE_PAD, (HEADER_H - F18.size) // 2), fit_text(title, 18), F18, 255)
+    rx = W - TEXT_SAFE_PAD - int(draw.textlength(right, font=F12))
+    text(draw, (rx, (HEADER_H - F12.size) // 2 + 1), right, F12, 255)
 
 
-def box(draw: ImageDraw.ImageDraw, xywh, width: int = 1, fill: int | None = None) -> None:
+def filled_block(draw: ImageDraw.ImageDraw, xywh) -> None:
+    """Solid black rectangle — the primary emphasis device on monochrome e-paper."""
     x, y, w, h = xywh
-    draw.rounded_rectangle((x, y, x + w, y + h), radius=2, outline=0, width=width, fill=fill)
+    draw.rectangle((x, y, x + w - 1, y + h - 1), fill=0)
 
 
-def band(draw: ImageDraw.ImageDraw, xywh, title: str) -> None:
-    x, y, w, h = xywh
-    draw.rectangle((x, y, x + w, y + h), fill=0)
-    text(draw, (x + 7, y + 3), fit_text(title, 18), F14, 255)
+def soft_card(draw: ImageDraw.ImageDraw, xywh) -> None:
+    """Whitespace card with no border — used for non-emphasized content sections."""
+    # Deliberately draws nothing; kept as a hook for parity with firmware.
+    _ = (draw, xywh)
+
+
+def section_label(draw: ImageDraw.ImageDraw, xy, label: str, fill=0) -> None:
+    """Small caps-style section heading."""
+    x, y = xy
+    text(draw, (x, y), label, F12, fill)
 
 
 def status_pill(draw: ImageDraw.ImageDraw, xywh, label: str, inverted: bool = False) -> None:
     x, y, w, h = xywh
-    box(draw, (x, y, w, h), fill=0 if inverted else 255)
+    if inverted:
+        filled_block(draw, (x, y, w, h))
     fill = 255 if inverted else 0
     visible = fit_text(label, 14)
-    text_width = int(draw.textlength(visible, font=F12))
-    text(draw, (x + max(4, (w - text_width) // 2), y + 4), visible, F12, fill)
+    tw = int(draw.textlength(visible, font=F12))
+    text(draw, (x + max(SP_4, (w - tw) // 2), y + (h - F12.size) // 2), visible, F12, fill)
 
 
-def console_header(draw: ImageDraw.ImageDraw, section: str, title: str, meta: str) -> None:
-    status_pill(draw, (10, 42, 92, 22), section, True)
-    text(draw, (114, 42), fit_text(title, 18), F18)
-    status_pill(draw, (298, 42, 92, 22), meta)
-    draw.line((10, 74, 390, 74), fill=0)
+def thin_rule(draw: ImageDraw.ImageDraw, xy, w: int, fill=0) -> None:
+    """A single 1px rule — used sparingly inside filled blocks only."""
+    x, y = xy
+    draw.line((x, y, x + w - 1, y), fill=fill)
 
 
-def signal_rail(draw: ImageDraw.ImageDraw, x: int, y: int, h: int, active: bool = True) -> None:
-    width = 4 if active else 2
-    draw.rectangle((x, y, x + width, y + h), fill=0)
-    for offset in range(0, max(1, h - 4), 24):
-        draw.rectangle((x - 1, y + offset, x + 5, y + offset + 5), fill=0)
+def vertical_rule(draw: ImageDraw.ImageDraw, xy, h: int, fill=0) -> None:
+    x, y = xy
+    draw.line((x, y, x, y + h - 1), fill=fill)
 
 
-def clock_block(draw: ImageDraw.ImageDraw, x: int, y: int, h: int, value: str) -> None:
-    draw.rectangle((x, y, x + 74, y + h), fill=0)
-    text(draw, (x + 18, y + 7), "ON AIR", F10, 255)
-    text(draw, (x + 12, y + h - 24), value, F14, 255)
+def dotted_rule(draw: ImageDraw.ImageDraw, xy, w: int, fill=0, step: int = 6) -> None:
+    x, y = xy
+    for px in range(x, x + w, step):
+        draw.line((px, y, min(px + 2, x + w - 1), y), fill=fill)
 
 
-def time_row(draw: ImageDraw.ImageDraw, x: int, y: int, t: str, title: str, active: bool = False) -> None:
-    if active:
-        draw.rectangle((x, y, x + 50, y + 22), fill=0)
-        text(draw, (x + 7, y + 4), t, F10, 255)
-    else:
-        box(draw, (x, y, 50, 22))
-        text(draw, (x + 7, y + 4), t, F10)
-    text(draw, (x + 62, y + 1), fit_text(title, 11), F15)
-
-
-def selected_row(draw: ImageDraw.ImageDraw, xywh, title: str, subtitle: str, selected: bool) -> None:
+def time_pill(draw: ImageDraw.ImageDraw, xywh, value: str, active: bool) -> None:
+    """Time label pill: filled when active, plain text otherwise."""
     x, y, w, h = xywh
-    box(draw, (x, y, w, h), fill=0 if selected else 255)
-    fill = 255 if selected else 0
-    text(draw, (x + 10, y + 5), title, F15, fill)
-    text(draw, (x + 116, y + 8), fit_text(subtitle, 20), F12, fill)
+    if active:
+        filled_block(draw, (x, y, w, h))
+        fill = 255
+    else:
+        fill = 0
+    text(draw, (x + SP_8, y + (h - F12.size) // 2), value, F12, fill)
 
 
-def qr(payload: str, size: int) -> Image.Image:
-    code = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=8, border=4)
+def qr(payload: str, max_size: int) -> Image.Image:
+    probe = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=1, border=0)
+    probe.add_data(payload)
+    probe.make(fit=True)
+    box_size = max(1, max_size // probe.modules_count)
+    code = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=box_size, border=0)
     code.add_data(payload)
     code.make(fit=True)
-    img = code.make_image(fill_color="black", back_color="white").convert("1")
-    return img.resize((size, size), Image.Resampling.NEAREST)
+    return code.make_image(fill_color="black", back_color="white").convert("1")
+
+
+def qr_panel(img: Image.Image, draw: ImageDraw.ImageDraw, xywh, title: str, subtitle: str, payload: str,
+             qr_size: int, title_font=F14) -> None:
+    """Open QR ticket with text safe padding and a scan-friendly quiet zone."""
+    x, y, w, h = xywh
+    filled_block(draw, (x + SP_4, y + SP_8, 24, 4))
+    thin_rule(draw, (x + SP_4, y + 52), w - SP_8)
+
+    label_x = x + SP_12
+    text(draw, (label_x, y + SP_16), fit_text(title, 12), title_font, 0)
+    text(draw, (label_x, y + SP_16 + title_font.size + SP_4), fit_text(subtitle, 16), F10, 0)
+
+    q_size = min(qr_size, w - 2 * QR_QUIET_ZONE, h - 64 - 2 * QR_QUIET_ZONE)
+    q = qr(payload, q_size)
+    outer_w = q.width + 2 * QR_QUIET_ZONE
+    outer_x = x + (w - outer_w) // 2
+    outer_y = y + h - outer_w - QR_QUIET_ZONE
+    draw.rectangle((outer_x, outer_y, outer_x + outer_w - 1, outer_y + outer_w - 1), fill=255)
+    img.paste(q, (outer_x + QR_QUIET_ZONE, outer_y + QR_QUIET_ZONE))
 
 
 def kiosk_qr_card(img: Image.Image, draw: ImageDraw.ImageDraw, xywh, title: str, subtitle: str, payload: str) -> None:
-    x, y, w, h = xywh
-    box(draw, (x, y, w, h))
-    draw.rectangle((x + 8, y + 8, x + w - 9, y + 34), fill=0)
-    text(draw, (x + 14, y + 11), title, F12, 255)
-    text(draw, (x + 10, y + 43), fit_text(subtitle, 13), F12)
-    q = qr(payload, min(w - 48, h - 74))
-    img.paste(q, (x + (w - q.width) // 2, y + h - q.height - 10))
+    """Small QR card: side-rail title + centered QR with a generous quiet zone."""
+    qr_panel(img, draw, xywh, title, subtitle, payload, QR_CODE_SIZE, F12)
 
 
 def primary_qr_panel(img: Image.Image, draw: ImageDraw.ImageDraw, xywh, title: str, subtitle: str, payload: str) -> None:
-    x, y, w, h = xywh
-    box(draw, (x, y, w, h))
-    draw.rectangle((x + 8, y + 8, x + w - 9, y + 36), fill=0)
-    text(draw, (x + 14, y + 12), title, F14, 255)
-    text(draw, (x + 12, y + 48), fit_text(subtitle, 16), F12)
-    q = qr(payload, min(w - 62, h - 72))
-    img.paste(q, (x + (w - q.width) // 2, y + h - q.height - 10))
+    """Large QR panel: same card grammar as small QR, with a larger code."""
+    qr_panel(img, draw, xywh, title, subtitle, payload, QR_CODE_SIZE, F14)
 
 
-def keyword_strip(draw: ImageDraw.ImageDraw, keywords: list[str], x: int, y: int) -> None:
-    for idx, word in enumerate(keywords[:4]):
-        status_pill(draw, (x, y + idx * 28, 86 if idx == 0 else 76, 22), word, idx == 0)
+def BuildQrTicket(img: Image.Image, draw: ImageDraw.ImageDraw, xywh, title: str, subtitle: str, payload: str,
+                  qr_size: int = QR_CODE_SIZE, title_font=F14) -> None:
+    """Name kept in sync with firmware helper."""
+    qr_panel(img, draw, xywh, title, subtitle, payload, qr_size, title_font)
 
 
 def agenda_items(data: dict[str, Any]) -> list[dict[str, str]]:
     return list(data.get("agenda", []))
 
 
+# ===========================================================================
+# Page 1 — Home / NOTE DESK
+# ===========================================================================
+
 def render_home(data: dict[str, Any]) -> Image.Image:
     img, draw = canvas()
     home = data.get("home", {})
     status = data.get("device_status", {})
-    header(draw, "NOTE DESK", home.get("date_label", "07/05 周日"))
-    home_command_desk(draw, data, status)
+    header(draw, "极趣便利贴", home.get("date_label", "07/05 周日"))
+    make_binding_rail(draw)
+    home_sticky_surface(draw, data, status)
     return img
 
 
-def home_command_desk(draw: ImageDraw.ImageDraw, data: dict[str, Any], status: dict[str, Any]) -> None:
+def make_binding_rail(draw: ImageDraw.ImageDraw) -> None:
+    """Three-hole binder rail: a subtle sticky-note signature instead of a large black card."""
+    x, y = MARGIN, HEADER_H + SP_12
+    h = H - BOTTOM_SAFE_H - y - 1
+    draw.line((x + 10, y, x + 10, y + h), fill=0, width=2)
+    for cy in (y + 34, y + 100, y + 166):
+        draw.ellipse((x + 3, cy - 5, x + 13, cy + 5), outline=0, width=2)
+
+
+
+def home_binder_rail(draw: ImageDraw.ImageDraw) -> None:
+    make_binding_rail(draw)
+
+def home_sticky_surface(draw: ImageDraw.ImageDraw, data: dict[str, Any], status: dict[str, Any]) -> None:
+    current_note_stage(draw, data, status)
+
+
+def current_note_stage(draw: ImageDraw.ImageDraw, data: dict[str, Any], status: dict[str, Any]) -> None:
+    """MakeNotePaperSurface parity: open note sheet, no heavy outer box."""
     items = agenda_items(data)
     current_idx = int(data.get("current_agenda_index", 0))
     current = items[current_idx] if 0 <= current_idx < len(items) else (items[0] if items else {})
     next_item = items[current_idx + 1] if current_idx + 1 < len(items) else {}
-    home_hero_card(draw, current)
-    device_status_panel(draw, data.get("home", {}), status)
+
+    x, y, w, h = 38, HEADER_H + SP_8, W - 50, H - HEADER_H - SP_16
+    thin_rule(draw, (x + SP_12, y + 82), w - SP_32)
+    thin_rule(draw, (x + SP_12, y + 126), w - SP_32)
+    filled_block(draw, (x + w - 62, y + SP_12, 38, 4))
+
+    ix = x + SP_16
+    text(draw, (ix, y + SP_12), "今日便签", F10)
+    filled_block(draw, (ix, y + 30, 62, 28))
+    text(draw, (ix + SP_8, y + 36), current.get("time", "--:--"), F12, 255)
+    multiline(draw, (ix + 76, y + 28), current.get("title", ""), F18, 0, w - 112, 2, 2)
+    meta = " / ".join(part for part in (current.get("speaker", ""), current.get("note", "")) if part)
+    text(draw, (ix, y + 64), fit_text(meta or "便利贴模式保留原功能", 28), F10)
+
     next_title = next_item.get("title", "暂无后续待办")
     next_time = next_item.get("time", "--:--")
-    box(draw, (12, 158, 376, 46))
-    text(draw, (24, 168), "下一个", F12)
-    text(draw, (82, 166), f"{next_time}  {fit_text(next_title, 16)}", F15)
-    home_action_card(draw, (12, 220, 182, 62), "便利贴", "今日待办", True)
-    home_action_card(draw, (206, 220, 182, 62), "实验室", "会议助手", False)
+    text(draw, (ix, y + 92), "下一项", F10)
+    text(draw, (ix + 60, y + 88), f"{next_time}  {fit_text(next_title, 18)}", F14)
+
+    home_status_line(draw, (ix, y + 144, w - SP_32, 30), data.get("home", {}), status)
+    home_action_card(draw, (ix, y + 202, 136, 36), "便利贴", "今日待办", True)
+    home_action_card(draw, (ix + 150, y + 202, 136, 36), "实验室", "会议助手", False)
+
+
+
+def note_paper_surface(draw: ImageDraw.ImageDraw, data: dict[str, Any], status: dict[str, Any]) -> None:
+    current_note_stage(draw, data, status)
+
+def home_command_desk(draw: ImageDraw.ImageDraw, data: dict[str, Any], status: dict[str, Any]) -> None:
+    make_binding_rail(draw)
+    home_sticky_surface(draw, data, status)
 
 
 def home_hero_card(draw: ImageDraw.ImageDraw, item: dict[str, str]) -> None:
-    box(draw, (12, 44, 236, 98), fill=0)
-    text(draw, (24, 54), "当前待办", F12, 255)
-    text(draw, (24, 82), item.get("time", "--:--"), F20, 255)
-    multiline(draw, (104, 78), item.get("title", ""), F16, 255, 116, 2, 3)
-    text(draw, (24, 122), "确认保留在便利贴模式", F10, 255)
+    _ = (draw, item)
 
 
 def device_status_panel(draw: ImageDraw.ImageDraw, home: dict[str, Any], status: dict[str, Any]) -> None:
-    box(draw, (260, 44, 128, 98))
-    text(draw, (272, 54), home.get("month", "JUL"), F12)
-    text(draw, (272, 76), home.get("day", "05"), F20)
-    text(draw, (334, 84), home.get("weekday", "周日"), F15)
-    draw.line((272, 112, 376, 112), fill=0)
-    text(draw, (272, 122), fit_text(status.get("network", "离线"), 4), F12)
-    text(draw, (330, 122), fit_text(status.get("nfc", "Ready"), 5), F12)
+    _ = (draw, home, status)
+
+
+def home_status_line(draw: ImageDraw.ImageDraw, xywh, home: dict[str, Any], status: dict[str, Any]) -> None:
+    x, y, w, h = xywh
+    text(draw, (x, y), f"{home.get('month', 'JUL')} {home.get('day', '05')} {home.get('weekday', '周日')}", F14)
+    text(draw, (x + 170, y + 1), fit_text(status.get("network", "离线"), 5), F12)
+    text(draw, (x + 226, y + 1), fit_text(status.get("nfc", "Ready"), 6), F12)
 
 
 def home_action_card(draw: ImageDraw.ImageDraw, xywh, title: str, subtitle: str, selected: bool) -> None:
     x, y, w, h = xywh
-    box(draw, (x, y, w, h), fill=0 if selected else 255)
-    fill = 255 if selected else 0
-    text(draw, (x + 12, y + 10), title, F16, fill)
-    text(draw, (x + 12, y + 36), subtitle, F12, fill)
+    if selected:
+        filled_block(draw, (x, y, w, h))
+        fill = 255
+    else:
+        soft_card(draw, (x, y, w, h))
+        # Subtle outline only on unselected, so the selected one reads as emphasized
+        draw.rectangle((x, y, x + w - 1, y + h - 1), outline=0, width=1)
+        fill = 0
+    text(draw, (x + SP_12, y + 7), title, F12, fill)
+    text(draw, (x + SP_12, y + 23), subtitle, F10, fill)
 
+
+# ===========================================================================
+# Page 2 — Lab
+# ===========================================================================
 
 def render_lab(data: dict[str, Any]) -> Image.Image:
     img, draw = canvas()
     header(draw, "实验室", "LAB")
-    lab_console(draw, data)
+    lab_plugin_drawer(draw, data)
     return img
 
 
 def lab_console(draw: ImageDraw.ImageDraw, data: dict[str, Any]) -> None:
-    rows = data.get("lab_features", [])
-    if rows:
-        lab_hero_card(draw, rows[0], True)
-    capability_tile(draw, rows[1] if len(rows) > 1 else {}, 2, (12, 160), False)
-    capability_tile(draw, rows[2] if len(rows) > 2 else {}, 3, (206, 160), False)
-    box(draw, (12, 240, 376, 42), fill=0)
-    text(draw, (24, 252), "设备状态", F12, 255)
-    text(draw, (112, 252), "RTC / NFC / 网络", F12, 255)
+    lab_plugin_drawer(draw, data)
 
+
+def lab_plugin_drawer(draw: ImageDraw.ImageDraw, data: dict[str, Any]) -> None:
+    lab_tool_drawer(draw, data)
+
+
+def lab_tool_drawer(draw: ImageDraw.ImageDraw, data: dict[str, Any]) -> None:
+    """MakeLabFeatureStage parity: open plugin shelf with one primary entry."""
+    """Plugin drawer: meeting assistant coexists with the original sticky-note home."""
+    rows = data.get("lab_features", [])
+    x, y, w, h = MARGIN, HEADER_H + SP_8, W - 2 * MARGIN, H - HEADER_H - SP_16
+    filled_block(draw, (x, y + SP_4, 12, h - SP_8))
+    text(draw, (x + SP_24, y + SP_12), "额外功能", F10)
+    text(draw, (x + w - 90, y + SP_12), "本地 RTC", F10)
+
+    lab_hero_card(draw, rows[0] if rows else {}, True)
+    drawer_feature_row(draw, rows[1] if len(rows) > 1 else {}, "02", y + 112, False)
+    drawer_feature_row(draw, rows[2] if len(rows) > 2 else {}, "03", y + 158, False)
+    drawer_feature_row(draw, rows[3] if len(rows) > 3 else {}, "04", y + 204, False)
+
+
+
+def lab_feature_stage(draw: ImageDraw.ImageDraw, data: dict[str, Any]) -> None:
+    lab_tool_drawer(draw, data)
 
 def lab_hero_card(draw: ImageDraw.ImageDraw, row: dict[str, str], selected: bool) -> None:
-    x, y, w, h = 12, 54, 376, 88
-    box(draw, (x, y, w, h), fill=0 if selected else 255)
-    fill = 255 if selected else 0
-    text(draw, (x + 16, y + 12), row.get("title", "会议助手"), F18, fill)
-    multiline(draw, (x + 16, y + 44), row.get("subtitle", ""), F12, fill, 220, 2, 2)
-    text(draw, (x + 284, y + 18), "确认进入", F12, fill)
-    text(draw, (x + 284, y + 46), "AI / QR", F12, fill)
+    x, y, w, h = MARGIN + 34, HEADER_H + SP_8 + 28, W - 2 * MARGIN - 46, 76
+    if selected:
+        filled_block(draw, (x, y + SP_8, 8, h - SP_16))
+        fill = 0
+    else:
+        soft_card(draw, (x, y, w, h))
+        fill = 0
+    ix, iy = x + SP_20, y + SP_12
+    text(draw, (ix, iy), row.get("title", "会议助手"), F18, fill)
+    multiline(draw, (ix, iy + SP_24), row.get("subtitle", ""), F12, fill, w - SP_32 - 92, 2, 3)
+    filled_block(draw, (x + w - 88, y + SP_16, 64, 24))
+    text(draw, (x + w - 78, y + SP_16 + 5), "进入", F12, 255)
+    text(draw, (x + w - 88, y + SP_16 + 30), "AI / QR", F10, 0)
+
+
+def drawer_feature_row(draw: ImageDraw.ImageDraw, row: dict[str, str], number: str, y: int, selected: bool) -> None:
+    x, w, h = MARGIN + 34, W - 2 * MARGIN - 46, 34
+    if selected:
+        filled_block(draw, (x, y, w, h))
+        fill = 255
+    else:
+        fill = 0
+        thin_rule(draw, (x, y + h - 1), w)
+    text(draw, (x + SP_12, y + 7), number, F10, fill)
+    text(draw, (x + 48, y + 5), row.get("title", ""), F14, fill)
+    text(draw, (x + 158, y + 7), fit_text(row.get("subtitle", ""), 18), F10, fill)
 
 
 def capability_tile(draw: ImageDraw.ImageDraw, row: dict[str, str], number: int, xy, selected: bool) -> None:
     x, y = xy
-    box(draw, (x, y, 182, 64), fill=0 if selected else 255)
-    fill = 255 if selected else 0
-    text(draw, (x + 12, y + 10), row.get("title", ""), F15, fill)
-    text(draw, (x + 12, y + 36), fit_text(row.get("subtitle", ""), 14), F12, fill)
+    w, h = 182, 68
+    if selected:
+        filled_block(draw, (x, y, w, h))
+        fill = 255
+    else:
+        soft_card(draw, (x, y, w, h))
+        draw.rectangle((x, y, x + w - 1, y + h - 1), outline=0, width=1)
+        fill = 0
+    ix, iy = x + SP_12, y + SP_12
+    text(draw, (ix, iy), f"{number:02d}", F10, fill)
+    text(draw, (ix, iy + SP_12), row.get("title", ""), F14, fill)
+    text(draw, (ix, iy + SP_12 + F14.size + SP_4), fit_text(row.get("subtitle", ""), 16), F12, fill)
 
+
+# ===========================================================================
+# Page 3 — Meeting agenda
+# ===========================================================================
 
 def render_agenda(data: dict[str, Any]) -> Image.Image:
     img, draw = canvas()
-    header(draw, "GoTim ink", "1/4")
+    header(draw, "会议助手", "1/4")
+    meeting_scroll_canvas(draw, "议程", "上下滚动")
     clean_agenda_page(draw, data)
     return img
 
 
+def meeting_scroll_canvas(draw: ImageDraw.ImageDraw, section: str, hint: str) -> None:
+    """Shared meeting canvas with a visible scroll affordance and quiet content area."""
+    y = HEADER_H + SP_8
+    text(draw, (MARGIN, y), section, F12)
+    text(draw, (W - MARGIN - int(draw.textlength(hint, font=F10)), y + 1), hint, F10)
+    dotted_rule(draw, (MARGIN, y + 18), W - 2 * MARGIN)
+
+
 def clean_agenda_page(draw: ImageDraw.ImageDraw, data: dict[str, Any]) -> None:
+    live_briefing_page(draw, data)
+
+
+def metric_strip(draw: ImageDraw.ImageDraw, metrics: list[dict[str, Any]], xywh) -> None:
+    x, y, w, h = xywh
+    cell_w = w // 3
+    for i, item in enumerate(metrics[:3]):
+        cx = x + i * cell_w
+        if i > 0:
+            vertical_rule(draw, (cx - SP_8, y + 4), h - SP_8)
+        text(draw, (cx, y), fit_text(item.get("label", "数据"), 8), F10)
+        text(draw, (cx, y + 14), fit_text(item.get("value", "--"), 7), F18)
+        text(draw, (cx, y + 38), fit_text(item.get("delta", ""), 8), F10)
+
+
+def live_briefing_page(draw: ImageDraw.ImageDraw, data: dict[str, Any]) -> None:
     current_idx = int(data.get("current_agenda_index", 0))
     items = agenda_items(data)
     current = items[current_idx] if 0 <= current_idx < len(items) else (items[0] if items else {})
-    next_item = items[current_idx + 1] if current_idx + 1 < len(items) else {}
-    box(draw, (12, 48, 376, 112), fill=0)
-    text(draw, (24, 60), "当前议程", F12, 255)
-    text(draw, (24, 88), current.get("time", "--:--"), F20, 255)
-    multiline(draw, (116, 84), current.get("title", ""), F16, 255, 220, 2, 3)
-    meta = " | ".join(part for part in (current.get("speaker", ""), current.get("note", "")) if part)
-    text(draw, (24, 136), fit_text(meta, 28), F12, 255)
-    box(draw, (12, 176, 376, 54))
-    text(draw, (24, 188), "下一个", F12)
-    text(draw, (94, 188), f"{next_item.get('time', '--:--')}  {fit_text(next_item.get('title', '暂无'), 15)}", F15)
-    text(draw, (24, 250), "向下滚动查看更多议程", F12)
+    live = data.get("live", {})
+    metrics = data.get("summary", {}).get("metrics", [])
 
+    x, y, w = MARGIN, HEADER_H + 34, W - 2 * MARGIN
+    filled_block(draw, (x, y, 72, 28))
+    text(draw, (x + SP_8, y + 7), "LIVE", F12, 255)
+    text(draw, (x + 86, y + 2), fit_text(live.get("speaker", "发言者"), 14), F18)
+    text(draw, (x + 86, y + 28), fit_text(live.get("topic", "关键主题"), 22), F12)
+    text(draw, (x, y + 54), fit_text(live.get("status", "实时发言"), 18), F10)
+    text(draw, (x + 160, y + 54), fit_text(live.get("remote_update", "母机同步"), 18), F10)
+    thin_rule(draw, (x, y + 72), w)
+
+    text(draw, (x, y + 86), "当前议程", F10)
+    text(draw, (x + 68, y + 80), current.get("time", "--:--"), F12)
+    text(draw, (x + 124, y + 78), fit_text(current.get("title", ""), 18), F14)
+
+    metric_strip(draw, metrics, (x, y + 126, w, 58))
+    text(draw, (MARGIN, H - BOTTOM_SAFE_H - F10.size - SP_4), "长按返回便利贴，短按翻页", F10, 0)
+
+
+# ===========================================================================
+# Page 4 — Materials / QR
+# ===========================================================================
 
 def render_materials(data: dict[str, Any]) -> Image.Image:
     img, draw = canvas()
     materials = data.get("materials", {})
     interaction = data.get("interaction", {})
-    header(draw, "GoTim ink", "2/4")
+    header(draw, "会议助手", "2/4")
+    meeting_scroll_canvas(draw, "资料", "扫码")
     clean_materials_page(img, draw, materials, interaction)
     return img
 
 
 def clean_materials_page(img: Image.Image, draw: ImageDraw.ImageDraw, materials: dict[str, Any], interaction: dict[str, Any]) -> None:
-    primary_qr_panel(img, draw, (12, 48, 210, 210), "资料下载", materials.get("label", "PPT / PDF"), materials.get("url", "https://msh.cn/m"))
-    kiosk_qr_card(img, draw, (242, 72, 146, 162), "现场提问", interaction.get("label", "提交问题"), interaction.get("url", "https://msh.cn/q"))
-    text(draw, (18, 276), "左侧下载材料，右侧提交问题", F12)
+    # Two equal QR cards, each with a minimum 12px quiet-zone envelope for e-paper residue.
+    BuildQrTicket(img, draw, (TEXT_SAFE_PAD, HEADER_H + 28, QR_CARD_W, QR_CARD_H),
+                  "资料下载", materials.get("label", "PPT / PDF"), materials.get("url", "https://msh.cn/m"))
+    BuildQrTicket(img, draw, (W - TEXT_SAFE_PAD - QR_CARD_W, HEADER_H + 28, QR_CARD_W, QR_CARD_H),
+                  "现场提问", interaction.get("label", "提交问题"), interaction.get("url", "https://msh.cn/q"))
 
+
+# ===========================================================================
+# Page 5 — Insight / Summary
+# ===========================================================================
 
 def render_summary(data: dict[str, Any]) -> Image.Image:
     img, draw = canvas()
-    summary = data.get("summary", {})
-    header(draw, "GoTim ink", "3/4")
-    clean_insight_page(draw, summary)
+    header(draw, "会议助手", "3/4")
+    meeting_scroll_canvas(draw, "要点", "核心数据")
+    key_points_page(draw, data)
     return img
 
 
 def clean_insight_page(draw: ImageDraw.ImageDraw, summary: dict[str, Any]) -> None:
-    box(draw, (12, 48, 376, 164))
-    text(draw, (24, 60), summary.get("title", "AI 摘要"), F12)
-    draw.line((24, 88, 376, 88), fill=0)
-    y = 100
-    for line in summary.get("bullets", [])[:4]:
-        lines = wrap_text(draw, line, F12, 330, 1)
-        for wrapped in lines:
-            text(draw, (24, y), wrapped, F12)
-            y += 17
-    box(draw, (12, 228, 376, 46), fill=0)
-    text(draw, (24, 240), "关键词", F12, 255)
-    text(draw, (98, 240), " / ".join(summary.get("keywords", [])[:3]), F12, 255)
+    summary_receipt_page(draw, summary)
 
+
+def key_points_page(draw: ImageDraw.ImageDraw, data: dict[str, Any]) -> None:
+    summary = data.get("summary", {})
+    summary_receipt_page(draw, summary)
+    metric_strip(draw, summary.get("metrics", []), (MARGIN, HEADER_H + 184, W - 2 * MARGIN, 58))
+
+
+def summary_receipt_page(draw: ImageDraw.ImageDraw, summary: dict[str, Any]) -> None:
+    # Receipt-style summary: open body, compact keyword chips, no full-width black wall.
+    mx, my, mw, mh = MARGIN, HEADER_H + 34, W - 2 * MARGIN, 140
+    soft_card(draw, (mx, my, mw, mh))
+    ix, iy = mx, my
+    text(draw, (ix, iy), summary.get("title", "AI 摘要"), F14, 0)
+    filled_block(draw, (ix, iy + SP_20, 54, 4))
+    thin_rule(draw, (ix + 64, iy + SP_20 + 2), mw - 84, fill=0)
+    y = iy + SP_20 + SP_8
+    for line in summary.get("bullets", [])[:5]:
+        wrapped = wrap_text(draw, line, F12, mw - 2 * SP_8, 1)
+        for w in wrapped:
+            text(draw, (ix, y), w, F12, 0)
+            y += F12.size + SP_4
+
+
+
+# ===========================================================================
+# Page 6 — Reminder
+# ===========================================================================
 
 def render_reminder(data: dict[str, Any]) -> Image.Image:
     img, draw = canvas()
-    user = data.get("attendee", {})
-    reminder = data.get("reminder", {})
-    header(draw, "GoTim ink", "4/4")
-    clean_reminder_page(img, draw, user, reminder, int(data.get("active_reminder_index", -1)))
+    header(draw, "会议助手", "4/4")
+    meeting_scroll_canvas(draw, "Badge", "任务 / 健康")
+    badge_reminder_page(img, draw, data)
     return img
 
 
 def clean_reminder_page(img: Image.Image, draw: ImageDraw.ImageDraw, user: dict[str, Any], reminder: dict[str, Any], active_index: int) -> None:
-    box(draw, (12, 48, 220, 176))
-    text(draw, (24, 60), f"{user.get('name', '参会者')} 的提醒", F12)
-    draw.line((24, 86, 218, 86), fill=0)
-    for i, item in enumerate(reminder.get("items", [])[:3]):
-        y = 100 + i * 36
-        draw.rectangle((22, y, 76, y + 24), fill=0)
-        text(draw, (29, y + 5), item.get("time", "--:--"), F12, 255)
-        if i == active_index:
-            draw.rectangle((84, y - 2, 218, y + 28), fill=0)
-            text(draw, (92, y + 4), fit_text(item.get("title", ""), 8), F15, 255)
-        else:
-            text(draw, (92, y + 4), fit_text(item.get("title", ""), 8), F15)
-    kiosk_qr_card(img, draw, (250, 68, 138, 166), "提醒设置", "扫码修改", reminder.get("url", "https://msh.cn/r"))
-    text(draw, (18, 276), "到点自动高亮，可滚动查看更多", F12)
+    # Reminder list — soft card, no border
+    lx, ly, lw, lh = MARGIN, HEADER_H + 34, 180, 166
+    soft_card(draw, (lx, ly, lw, lh))
+    ix, iy = lx + SP_12, ly + SP_12
+    text(draw, (ix, iy), f"{user.get('name', '参会者')} 的提醒", F14, 0)
+    thin_rule(draw, (ix, iy + SP_20), lw - 2 * SP_12, fill=0)
 
+    for i, item in enumerate(reminder.get("items", [])[:3]):
+        row_y = iy + SP_20 + SP_8 + i * 36
+        active = i == active_index
+        time_pill(draw, (ix, row_y, 56, 24), item.get("time", "--:--"), active)
+        title_fill = 255 if active else 0
+        if active:
+            # Extend the filled emphasis across the row
+            filled_block(draw, (ix + 60, row_y - 2, lw - 2 * SP_12 - 60 - 4, 28))
+        text(draw, (ix + 68, row_y + 4), fit_text(item.get("title", ""), 8), F14, title_fill)
+
+    # Kiosk QR on the right with the same scan target as the materials page.
+    BuildQrTicket(img, draw, (208, HEADER_H + 28, QR_CARD_W, QR_CARD_H),
+                  "提醒设置", "扫码修改", reminder.get("url", "https://msh.cn/r"), QR_CODE_SIZE, F12)
+
+
+def identity_badge(draw: ImageDraw.ImageDraw, user: dict[str, Any], badge: dict[str, Any], xywh) -> None:
+    x, y, w, h = xywh
+    filled_block(draw, (x, y, w, 24))
+    text(draw, (x + SP_8, y + 6), badge.get("label", "会后身份 Badge"), F10, 255)
+    text(draw, (x + SP_12, y + 38), fit_text(user.get("name", "参会者"), 10), F18)
+    text(draw, (x + SP_12, y + 64), fit_text(user.get("role", "嘉宾"), 12), F12)
+    text(draw, (x + SP_12, y + 74), fit_text(user.get("id", "guest"), 16), F10)
+
+
+def task_list(draw: ImageDraw.ImageDraw, tasks: list[dict[str, Any]], xy) -> None:
+    x, y = xy
+    text(draw, (x, y), "桌面任务", F10)
+    for i, item in enumerate(tasks[:2]):
+        row_y = y + 18 + i * 26
+        text(draw, (x, row_y), item.get("time", "--"), F10)
+        text(draw, (x + 48, row_y - 2), fit_text(item.get("title", ""), 10), F12)
+
+
+def health_reminder_list(draw: ImageDraw.ImageDraw, items: list[dict[str, Any]], xy) -> None:
+    x, y = xy
+    text(draw, (x, y), "健康提醒", F10)
+    for i, item in enumerate(items[:2]):
+        row_y = y + 18 + i * 24
+        text(draw, (x, row_y), item.get("time", "--"), F10)
+        text(draw, (x + 48, row_y - 2), fit_text(item.get("title", ""), 10), F12)
+
+
+def badge_reminder_page(img: Image.Image, draw: ImageDraw.ImageDraw, data: dict[str, Any]) -> None:
+    user = data.get("attendee", {})
+    badge = data.get("badge", {})
+    reminder = data.get("reminder", {})
+    identity_badge(draw, user, badge, (MARGIN, HEADER_H + 34, 176, 90))
+    task_list(draw, data.get("desktop_tasks", []), (MARGIN, HEADER_H + 132))
+    health_reminder_list(draw, data.get("health_reminders", []), (MARGIN, HEADER_H + 188))
+    BuildQrTicket(img, draw, (208, HEADER_H + 28, QR_CARD_W, QR_CARD_H),
+                  "提醒设置", "扫码修改", reminder.get("url", "https://msh.cn/r"), QR_CODE_SIZE, F12)
+
+
+# ===========================================================================
+# Render + verify
+# ===========================================================================
 
 def render_pages(data: dict[str, Any], out: Path) -> list[Path]:
     out.mkdir(parents=True, exist_ok=True)
@@ -403,8 +643,8 @@ def check_layout(paths: list[Path]) -> list[str]:
         if "materials" in path.name:
             quiet_samples = [
                 img.getpixel((8, 78)),
-                img.getpixel((232, 78)),
-                img.getpixel((232, 38)),
+                img.getpixel((200, 78)),
+                img.getpixel((200, 220)),
                 img.getpixel((392, 38)),
             ]
             if any(pixel == 0 for pixel in quiet_samples):
@@ -412,8 +652,8 @@ def check_layout(paths: list[Path]) -> list[str]:
         if "reminder" in path.name:
             quiet_samples = [
                 img.getpixel((8, 78)),
-                img.getpixel((238, 78)),
-                img.getpixel((238, 38)),
+                img.getpixel((198, 78)),
+                img.getpixel((198, 220)),
                 img.getpixel((392, 38)),
             ]
             if any(pixel == 0 for pixel in quiet_samples):
@@ -421,13 +661,21 @@ def check_layout(paths: list[Path]) -> list[str]:
     return warnings
 
 
-def verify_qr(paths: list[Path]) -> None:
+def decode_qr_payloads(path: Path) -> list[str]:
+    return [item.text for item in decode_qr_items(path)]
+
+
+def decode_qr_items(path: Path):
     try:
         import zxingcpp
     except ModuleNotFoundError:
-        return
+        return []
+    return zxingcpp.read_barcodes(Image.open(path).convert("RGB"))
+
+
+def verify_qr(paths: list[Path]) -> None:
     for path in paths:
-        decoded = [item.text for item in zxingcpp.read_barcodes(Image.open(path).convert("RGB"))]
+        decoded = decode_qr_payloads(path)
         if decoded:
             print(f"{path.name}: {decoded}")
 

@@ -65,6 +65,18 @@ def test_noop_patch_does_not_increment(tmp_path):
     assert same == created
 
 
+def test_mutation_results_report_changed_without_altering_snapshot_methods(tmp_path):
+    store = make_store(tmp_path)
+
+    created = store.create_with_result({"title": "Demo"})
+    unchanged = store.patch_with_result(created.snapshot["notes"][0]["id"], {"title": "Demo"})
+
+    assert created.changed is True
+    assert store.create({"title": "Second"})["version"] == created.snapshot["version"] + 1
+    assert unchanged.changed is False
+    assert unchanged.snapshot == created.snapshot
+
+
 def test_stale_base_version_raises_and_preserves_latest_snapshot(tmp_path):
     store = make_store(tmp_path)
     created = store.create({"title": "A"})

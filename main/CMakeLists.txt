@@ -17,6 +17,7 @@ set(SOURCES
     "display/pages/meeting_assistant_page_adapter.cc"
     "meeting/meeting_config.cc"
     "meeting/meeting_data.cc"
+    "ble/ble_meeting_server.cc"
     "display/lvgl_display/lvgl_display.cc"
     "display/lvgl_display/lvgl_theme.cc"
     "display/lvgl_display/lvgl_font.cc"
@@ -36,6 +37,12 @@ set(SOURCES
     "boards/zectrix-s3-epaper-4.2/FT/factory_test_service.cc"
 )
 
+# No REQUIRES listed: ESP-IDF falls back to the legacy "common requirements"
+# behaviour for the main component, so every component's public headers
+# (spi_flash, esp_app_format, app_update, the 78__* and espressif__* managed
+# components, and now bt/NimBLE) are visible. Listing any REQUIRES would narrow
+# that and force enumerating the entire graph.
+
 set(INCLUDE_DIRS
     "."
     "audio"
@@ -43,6 +50,7 @@ set(INCLUDE_DIRS
     "display/lvgl_display"
     "protocols"
     "boards/common"
+    "ble"
 )
 
 idf_component_register(

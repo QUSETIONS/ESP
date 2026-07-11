@@ -1,0 +1,13 @@
+{
+  "description": "GoTim Ink BLE demo mini-program",
+  "miniprogramRoot": "miniprogram/",
+  "projectname": "gotim-ink-ble-demo",
+  "appid": "touristappid",
+  "setting": {
+    "urlCheck": false,
+    "es6": true,
+    "postcss": true,
+    "minified": false
+  },
+  "compileType": "miniprogram"
+}

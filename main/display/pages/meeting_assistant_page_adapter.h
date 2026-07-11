@@ -29,10 +29,18 @@ public:
 private:
     void UpdateContent();
     void ScrollBy(int delta_y);
+    void BuildScrollCanvas(const char* section, const char* hint);
+    void BuildLiveBriefingPage();
     void BuildCleanAgendaPage();
     void BuildCleanMaterialsPage();
+    void BuildKeyPointsPage();
     void BuildCleanInsightPage();
+    void BuildBadgeReminderPage();
     void BuildCleanReminderPage();
+    void MakeMetricStrip(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t w);
+    void MakeIdentityBadge(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h);
+    void MakeTaskList(lv_obj_t* parent, lv_coord_t x, lv_coord_t y);
+    void MakeHealthReminderList(lv_obj_t* parent, lv_coord_t x, lv_coord_t y);
 
     bool built_ = false;
     size_t page_index_ = 0;

@@ -8,6 +8,7 @@
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <nvs.h>
 
 #include <algorithm>
 #include <cctype>
@@ -20,6 +21,8 @@
 
 #include "FT/factory_test_service.h"
 #include "application.h"
+#include "ble/ble_meeting_protocol.h"
+#include "ble/ble_meeting_server.h"
 #include "board.h"
 #include "board_power_bsp.h"
 #include "boards/common/i2c_bus_lock.h"
@@ -38,21 +41,38 @@
 #include "sdkconfig.h"
 #include "ssid_manager.h"
 #include "wifi_manager.h"
+#include <cJSON.h>
 
 namespace {
 
 constexpr char kTag[] = "ZectrixFtBoard";
+constexpr char kWifiNamespace[] = "wifi";
+constexpr char kMeetingUrlKey[] = "meeting_url";
 constexpr uint16_t kNavLongPressMs = 1000;
 constexpr time_t kValidUnixTimeThreshold = 1704067200;  // 2024-01-01 00:00:00 UTC
 constexpr int kReminderLeadMinutes = 10;
 constexpr int kReminderHoldMinutes = 5;
 constexpr int kMeetingTimedUpdateIntervalMs = 30000;
-constexpr int kMeetingDataRefreshIntervalMs = 120000;
+constexpr int kMeetingVersionCheckIntervalMs = 5000;
+constexpr int kMeetingTaskTickMs = 1000;
+// Auto-paging of the meeting assistant: only ticks while the meeting page is
+// active, so the sticky-note home / lab pages keep their static e-paper. The
+// 20 s cadence lands mid-band of the requested 15-30 s window and is kept
+// independent from the timed-state recompute (30 s) cadence above.
+constexpr int64_t kAutoPageIntervalMs = 20000;
+constexpr int kWifiConfigFallbackMs = 30000;
 
 enum class BoardUiMode : uint8_t {
     StickyNote = 0,
     LabFeatures,
     MeetingAssistant,
+};
+
+struct ProvisioningPayload {
+    std::string ssid;
+    std::string password;
+    bool has_meeting_url = false;
+    std::string meeting_url;
 };
 
 class CustomBoard : public Board {
@@ -68,6 +88,7 @@ public:
         InitializeChargeStatus();
         InitializeLcdDisplay();
         InitializeButtons();
+        InitializeBle();
     }
 
     std::string GetBoardType() override {
@@ -123,6 +144,7 @@ public:
         } else {
             ESP_LOGI(kTag, "Starting Wi-Fi station");
             wifi.StartStation();
+            StartWifiConfigFallbackTask();
         }
     }
 
@@ -298,6 +320,258 @@ private:
         ApplyTimedMeetingState(true);
         RefreshClockLabels();
         StartTimedMeetingTask();
+    }
+
+    // Commit a meeting JSON payload received over BLE into the shared meeting
+    // state and push it to the display. Empty json reverts to the default
+    // payload (used by the control characteristic's revert command).
+    void CommitMeetingJson(const std::string& json, BleMeetingServer::CommitResult& out) {
+        MeetingData data;
+        if (json.empty()) {
+            data = MakeDefaultMeetingData();
+        } else if (!ParseMeetingDataJson(json, data)) {
+            ESP_LOGW(kTag, "BLE meeting JSON parse failed, bytes=%u",
+                     static_cast<unsigned>(json.size()));
+            out.ok = false;
+            out.code = 1;  // ble_meeting::ErrorCode::kParseFail
+            return;
+        }
+
+        tm local_tm = {};
+        if (GetBestLocalTime(local_tm)) {
+            ApplyTimedFields(data, local_tm);
+        }
+        {
+            std::lock_guard<std::mutex> lock(meeting_data_mutex_);
+            meeting_data_ = data;
+        }
+        if (display_ != nullptr) {
+            display_->SetMeetingData(data);
+            if (display_->IsMeetingAssistantPageActive()) {
+                display_->RequestUrgentRefresh();
+            }
+        }
+        out.ok = true;
+        out.meeting_id = data.meeting_id;
+        ESP_LOGI(kTag, "BLE meeting applied: id=%s agenda=%u",
+                 data.meeting_id.c_str(),
+                 static_cast<unsigned>(data.agenda_count));
+    }
+
+    static bool IsValidMeetingUrlFromBle(const std::string& url) {
+        if (url.empty()) {
+            return true;
+        }
+        if (url.size() >= 256) {
+            return false;
+        }
+        return url.rfind("http://", 0) == 0 || url.rfind("https://", 0) == 0;
+    }
+
+    bool ParseProvisioningJson(const std::string& json,
+                               ProvisioningPayload& payload,
+                               std::string& error) {
+        if (json.empty() || json.size() > ble_meeting::kMaxProvisionJsonBytes) {
+            error = "Invalid provisioning payload size";
+            return false;
+        }
+
+        cJSON* root = cJSON_Parse(json.c_str());
+        if (root == nullptr || !cJSON_IsObject(root)) {
+            if (root != nullptr) {
+                cJSON_Delete(root);
+            }
+            error = "Invalid provisioning JSON";
+            return false;
+        }
+
+        cJSON* ssid = cJSON_GetObjectItemCaseSensitive(root, "ssid");
+        if (!cJSON_IsString(ssid) || ssid->valuestring == nullptr) {
+            cJSON_Delete(root);
+            error = "Missing SSID";
+            return false;
+        }
+        payload.ssid = ssid->valuestring;
+        if (payload.ssid.empty() || payload.ssid.size() > 32) {
+            cJSON_Delete(root);
+            error = "Invalid SSID";
+            return false;
+        }
+
+        cJSON* password = cJSON_GetObjectItemCaseSensitive(root, "password");
+        if (password != nullptr && !cJSON_IsNull(password)) {
+            if (!cJSON_IsString(password) || password->valuestring == nullptr) {
+                cJSON_Delete(root);
+                error = "Invalid password";
+                return false;
+            }
+            payload.password = password->valuestring;
+            if (payload.password.size() > 64) {
+                cJSON_Delete(root);
+                error = "Invalid password";
+                return false;
+            }
+        }
+
+        cJSON* meeting_url = cJSON_GetObjectItemCaseSensitive(root, "meeting_url");
+        if (meeting_url != nullptr && !cJSON_IsNull(meeting_url)) {
+            if (!cJSON_IsString(meeting_url) || meeting_url->valuestring == nullptr) {
+                cJSON_Delete(root);
+                error = "Invalid meeting URL";
+                return false;
+            }
+            payload.has_meeting_url = true;
+            payload.meeting_url = meeting_url->valuestring;
+            if (!IsValidMeetingUrlFromBle(payload.meeting_url)) {
+                cJSON_Delete(root);
+                error = "Invalid meeting URL";
+                return false;
+            }
+        }
+
+        cJSON_Delete(root);
+        return true;
+    }
+
+    bool SaveMeetingUrlFromBle(const std::string& meeting_url, std::string* error) {
+        if (!IsValidMeetingUrlFromBle(meeting_url)) {
+            if (error != nullptr) {
+                *error = "Invalid meeting URL";
+            }
+            return false;
+        }
+
+        nvs_handle_t nvs = 0;
+        esp_err_t err = nvs_open(kWifiNamespace, NVS_READWRITE, &nvs);
+        if (err != ESP_OK) {
+            ESP_LOGE(kTag, "Failed to open NVS for BLE meeting URL: %d", err);
+            if (error != nullptr) {
+                *error = "Failed to open NVS";
+            }
+            return false;
+        }
+
+        if (meeting_url.empty()) {
+            err = nvs_erase_key(nvs, kMeetingUrlKey);
+            if (err == ESP_ERR_NVS_NOT_FOUND) {
+                err = ESP_OK;
+            }
+        } else {
+            err = nvs_set_str(nvs, kMeetingUrlKey, meeting_url.c_str());
+        }
+        if (err == ESP_OK) {
+            err = nvs_commit(nvs);
+        }
+        nvs_close(nvs);
+
+        if (err != ESP_OK) {
+            ESP_LOGE(kTag, "Failed to save BLE meeting URL: %d", err);
+            if (error != nullptr) {
+                *error = "Failed to save meeting URL";
+            }
+            return false;
+        }
+        return true;
+    }
+
+    void RestartWifiAfterBleProvision() {
+        auto& wifi = WifiManager::GetInstance();
+        if (!network_started_ || !wifi.IsInitialized()) {
+            StartNetwork();
+            return;
+        }
+
+        wifi.StopConfigAp();
+        wifi.StopStation();
+        WifiManager::GetInstance().StartStation();
+    }
+
+    void ProvisionWifiFromBle(const std::string& json, BleMeetingServer::CommitResult& out) {
+        ProvisioningPayload payload;
+        std::string error;
+        if (!ParseProvisioningJson(json, payload, error)) {
+            ESP_LOGW(kTag, "BLE provisioning parse failed: %s", error.c_str());
+            out.ok = false;
+            out.code = static_cast<uint8_t>(ble_meeting::ErrorCode::kBadProvision);
+            return;
+        }
+
+        SsidManager::GetInstance().AddSsid(payload.ssid, payload.password);
+        if (payload.has_meeting_url && !SaveMeetingUrlFromBle(payload.meeting_url, &error)) {
+            ESP_LOGW(kTag, "BLE meeting URL save failed: %s", error.c_str());
+            out.ok = false;
+            out.code = static_cast<uint8_t>(ble_meeting::ErrorCode::kProvisionFail);
+            return;
+        }
+
+        if (display_ != nullptr) {
+            display_->SetStickyNoteNetworkHint("BLE配网", payload.ssid, "连接中");
+            if (display_->IsStickyNoteHomePageActive()) {
+                display_->RequestUrgentRefresh();
+            }
+        }
+
+        RestartWifiAfterBleProvision();
+        out.ok = true;
+        out.meeting_id = "wifi:" + payload.ssid;
+        ESP_LOGI(kTag, "BLE Wi-Fi provisioning saved: ssid=%s meeting_url=%u",
+                 payload.ssid.c_str(),
+                 payload.has_meeting_url ? 1U : 0U);
+    }
+
+    void InitializeBle() {
+        ble_server_ = std::make_unique<BleMeetingServer>();
+        ble_server_->SetCommitCallback(
+            [this](const std::string& json, BleMeetingServer::CommitResult& out) {
+                CommitMeetingJson(json, out);
+            });
+        ble_server_->SetProvisionCallback(
+            [this](const std::string& json, BleMeetingServer::CommitResult& out) {
+                ProvisionWifiFromBle(json, out);
+            });
+        ble_server_->SetStatusCallback(
+            [](uint8_t state, uint8_t code, const std::string& meeting_id) {
+                ESP_LOGI(kTag, "BLE meeting state=%u code=%u id=%s",
+                         state, code, meeting_id.c_str());
+            });
+        const std::string name = CONFIG_BLE_MEETING_DEVICE_NAME;
+        if (!ble_server_->Start(name)) {
+            ESP_LOGE(kTag, "BLE meeting server start failed");
+            ble_server_.reset();
+        }
+    }
+
+    static void WifiConfigFallbackTaskEntry(void* arg) {
+        static_cast<CustomBoard*>(arg)->WifiConfigFallbackTask();
+        vTaskDelete(nullptr);
+    }
+
+    void StartWifiConfigFallbackTask() {
+        if (wifi_fallback_task_ != nullptr) {
+            return;
+        }
+        if (xTaskCreate(WifiConfigFallbackTaskEntry,
+                        "wifi_cfg_fallback",
+                        4096,
+                        this,
+                        3,
+                        &wifi_fallback_task_) != pdPASS) {
+            wifi_fallback_task_ = nullptr;
+            ESP_LOGE(kTag, "Failed to create Wi-Fi config fallback task");
+        }
+    }
+
+    void WifiConfigFallbackTask() {
+        vTaskDelay(pdMS_TO_TICKS(kWifiConfigFallbackMs));
+        wifi_fallback_task_ = nullptr;
+
+        auto& wifi = WifiManager::GetInstance();
+        if (!network_started_ || wifi_connected_ || !wifi.IsInitialized() || wifi.IsConfigMode()) {
+            return;
+        }
+
+        ESP_LOGW(kTag, "Wi-Fi station fallback to config AP after %d ms", kWifiConfigFallbackMs);
+        wifi.StartConfigAp();
     }
 
     void HandleWifiEvent(WifiEvent event) {
@@ -584,14 +858,25 @@ private:
 
     void TimedMeetingTask() {
         int64_t last_refresh_ms = GetNowMs();
+        int64_t last_auto_page_ms = GetNowMs();
         for (;;) {
             ApplyTimedMeetingState(false);
             const int64_t now_ms = GetNowMs();
-            if (wifi_connected_ && now_ms - last_refresh_ms >= kMeetingDataRefreshIntervalMs) {
+            if (wifi_connected_ && now_ms - last_refresh_ms >= kMeetingVersionCheckIntervalMs) {
                 StartMeetingFetchTask();
                 last_refresh_ms = now_ms;
             }
-            vTaskDelay(pdMS_TO_TICKS(kMeetingTimedUpdateIntervalMs));
+            // Auto-page the meeting assistant while it is the active page. The
+            // e-paper refresh cost is only paid when the meeting page is shown;
+            // the sticky-note home and lab pages are left untouched.
+            if (now_ms - last_auto_page_ms >= kAutoPageIntervalMs) {
+                last_auto_page_ms = now_ms;
+                if (display_ != nullptr && display_->IsMeetingAssistantPageActive()) {
+                    display_->MeetingAssistantNextPage();
+                    display_->RequestUrgentRefresh();
+                }
+            }
+            vTaskDelay(pdMS_TO_TICKS(kMeetingTaskTickMs));
         }
     }
 
@@ -623,6 +908,18 @@ private:
     }
 
     void MeetingFetchTask() {
+        uint64_t remote_version = 0;
+        if (!FetchMeetingVersionOnce(remote_version)) {
+            meeting_fetch_task_ = nullptr;
+            return;
+        }
+        if (has_applied_meeting_version_ && remote_version <= last_applied_meeting_version_) {
+            ESP_LOGD(kTag, "meeting version unchanged: remote=%llu applied=%llu",
+                     static_cast<unsigned long long>(remote_version),
+                     static_cast<unsigned long long>(last_applied_meeting_version_));
+            meeting_fetch_task_ = nullptr;
+            return;
+        }
         constexpr int kFetchAttempts = 3;
         for (int attempt = 1; attempt <= kFetchAttempts; ++attempt) {
             if (FetchMeetingDataOnce()) {
@@ -633,6 +930,45 @@ private:
             vTaskDelay(pdMS_TO_TICKS(3000));
         }
         meeting_fetch_task_ = nullptr;
+    }
+
+    bool FetchMeetingVersionOnce(uint64_t& remote_version) {
+        auto http = network_.CreateHttp();
+        if (!http) {
+            return false;
+        }
+        std::string url = GetMeetingAssistantUrl();
+        const std::string current_suffix = "/meeting/current";
+        const size_t suffix_pos = url.rfind(current_suffix);
+        if (suffix_pos != std::string::npos && suffix_pos + current_suffix.size() == url.size()) {
+            url.replace(suffix_pos, current_suffix.size(), "/meeting/version");
+        } else {
+            const size_t slash = url.rfind('/');
+            url = (slash == std::string::npos ? url : url.substr(0, slash)) + "/meeting/version";
+        }
+        http->SetTimeout(5000);
+        http->SetHeader("User-Agent", "ZecTrixMeeting/0.2");
+        http->SetKeepAlive(false);
+        if (!http->Open("GET", url)) {
+            return false;
+        }
+        const std::string body = http->ReadAll();
+        const int status = http->GetStatusCode();
+        http->Close();
+        if (status < 200 || status >= 300 || body.empty()) {
+            return false;
+        }
+        cJSON* root = cJSON_ParseWithLength(body.c_str(), body.size());
+        if (root == nullptr) {
+            return false;
+        }
+        const cJSON* version = cJSON_GetObjectItemCaseSensitive(root, "version");
+        const bool valid = cJSON_IsNumber(version) && version->valuedouble >= 0;
+        if (valid) {
+            remote_version = static_cast<uint64_t>(version->valuedouble);
+        }
+        cJSON_Delete(root);
+        return valid;
     }
 
     bool FetchMeetingDataOnce() {
@@ -680,6 +1016,8 @@ private:
         {
             std::lock_guard<std::mutex> lock(meeting_data_mutex_);
             meeting_data_ = data;
+            last_applied_meeting_version_ = data.version;
+            has_applied_meeting_version_ = true;
         }
         if (display_ != nullptr) {
             display_->SetMeetingData(data);
@@ -865,6 +1203,7 @@ private:
     i2c_master_bus_handle_t i2c_bus_ = nullptr;
     std::unique_ptr<RtcPcf8563> rtc_;
     std::unique_ptr<ZectrixNfc> nfc_;
+    std::unique_ptr<BleMeetingServer> ble_server_;
     ChargeStatus charge_status_;
     std::mutex meeting_data_mutex_;
     MeetingData meeting_data_;
@@ -872,8 +1211,11 @@ private:
     bool network_started_ = false;
     bool wifi_connected_ = false;
     bool sntp_started_ = false;
+    uint64_t last_applied_meeting_version_ = 0;
+    bool has_applied_meeting_version_ = false;
     TaskHandle_t meeting_fetch_task_ = nullptr;
     TaskHandle_t timed_meeting_task_ = nullptr;
+    TaskHandle_t wifi_fallback_task_ = nullptr;
     BoardUiMode ui_mode_ = BoardUiMode::StickyNote;
     Button up_button_;
     Button down_button_;

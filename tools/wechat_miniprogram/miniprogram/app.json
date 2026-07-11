@@ -1,0 +1,13 @@
+{
+  "pages": [
+    "pages/index/index"
+  ],
+  "window": {
+    "navigationBarTitleText": "GoTim Ink",
+    "navigationBarBackgroundColor": "#101820",
+    "navigationBarTextStyle": "white",
+    "backgroundColor": "#f4f1e8"
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
+}

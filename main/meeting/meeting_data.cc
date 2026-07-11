@@ -22,6 +22,14 @@ int JsonInt(const cJSON* obj, const char* key, int fallback = 0) {
     return fallback;
 }
 
+uint64_t JsonUInt64(const cJSON* obj, const char* key, uint64_t fallback = 0) {
+    const cJSON* item = cJSON_GetObjectItemCaseSensitive(obj, key);
+    if (cJSON_IsNumber(item) && item->valuedouble >= 0) {
+        return static_cast<uint64_t>(item->valuedouble);
+    }
+    return fallback;
+}
+
 const cJSON* JsonObject(const cJSON* obj, const char* key) {
     const cJSON* item = cJSON_GetObjectItemCaseSensitive(obj, key);
     return cJSON_IsObject(item) ? item : nullptr;
@@ -37,7 +45,15 @@ const cJSON* JsonArray(const cJSON* obj, const char* key) {
 MeetingData MakeDefaultMeetingData() {
     MeetingData data;
     data.meeting_id = "local-default";
+    data.attendee_id = "guest-001";
     data.attendee_name = "张军先生";
+    data.attendee_role = "参会嘉宾";
+    data.badge_label = "会后身份 Badge";
+    data.badge_footer = "会后可带走设备作为身份牌";
+    data.live_speaker = "孙晓华 主席";
+    data.live_topic = "未来五年发展方向";
+    data.live_status = "09:35 正在发言";
+    data.remote_update = "母机同步 42 台设备";
     data.current_agenda_index = 0;
     data.active_reminder_index = -1;
 
@@ -65,12 +81,23 @@ MeetingData MakeDefaultMeetingData() {
     data.keywords[1] = "专业性";
     data.keywords[2] = "国际合作";
     data.keywords[3] = "品牌建设";
+    data.metric_count = 3;
+    data.metrics[0] = {"年度预算", "320万", "+18%"};
+    data.metrics[1] = {"合作单位", "26家", "+6"};
+    data.metrics[2] = {"待表决", "3项", "10:30"};
 
     data.reminder_url = "https://msh.cn/r";
     data.reminder_count = 3;
     data.reminders[0] = {"11:30", "午餐与交流"};
     data.reminders[1] = {"14:00", "分论坛"};
     data.reminders[2] = {"15:30", "集体合影"};
+    data.desktop_task_count = 3;
+    data.desktop_tasks[0] = {"17:00", "确认客户反馈", "张晨钰"};
+    data.desktop_tasks[1] = {"明早", "发送会议纪要", "Jasper"};
+    data.desktop_tasks[2] = {"周五", "客户回访", "项目组"};
+    data.health_reminder_count = 2;
+    data.health_reminders[0] = {"10:50", "起身活动 3 分钟"};
+    data.health_reminders[1] = {"15:00", "喝水提醒"};
     return data;
 }
 
@@ -86,11 +113,24 @@ bool ParseMeetingDataJson(const std::string& json, MeetingData& out) {
     }
 
     MeetingData data = MakeDefaultMeetingData();
+    data.version = JsonUInt64(payload, "version", data.version);
     data.meeting_id = JsonString(payload, "meeting_id", data.meeting_id);
     data.current_agenda_index = JsonInt(payload, "current_agenda_index", data.current_agenda_index);
 
     if (const cJSON* attendee = JsonObject(payload, "attendee")) {
+        data.attendee_id = JsonString(attendee, "id", data.attendee_id);
         data.attendee_name = JsonString(attendee, "name", data.attendee_name);
+        data.attendee_role = JsonString(attendee, "role", data.attendee_role);
+    }
+    if (const cJSON* badge = JsonObject(payload, "badge")) {
+        data.badge_label = JsonString(badge, "label", data.badge_label);
+        data.badge_footer = JsonString(badge, "footer", data.badge_footer);
+    }
+    if (const cJSON* live = JsonObject(payload, "live")) {
+        data.live_speaker = JsonString(live, "speaker", data.live_speaker);
+        data.live_topic = JsonString(live, "topic", data.live_topic);
+        data.live_status = JsonString(live, "status", data.live_status);
+        data.remote_update = JsonString(live, "remote_update", data.remote_update);
     }
 
     if (const cJSON* agenda = JsonArray(payload, "agenda")) {
@@ -142,6 +182,20 @@ bool ParseMeetingDataJson(const std::string& json, MeetingData& out) {
                 data.keywords[data.keyword_count++] = item->valuestring;
             }
         }
+        if (const cJSON* metrics = JsonArray(summary, "metrics")) {
+            data.metric_count = 0;
+            const cJSON* item = nullptr;
+            cJSON_ArrayForEach(item, metrics) {
+                if (!cJSON_IsObject(item) || data.metric_count >= MeetingData::kMaxMetrics) {
+                    continue;
+                }
+                data.metrics[data.metric_count++] = {
+                    JsonString(item, "label"),
+                    JsonString(item, "value"),
+                    JsonString(item, "delta"),
+                };
+            }
+        }
     }
 
     if (const cJSON* reminder = JsonObject(payload, "reminder")) {
@@ -158,6 +212,35 @@ bool ParseMeetingDataJson(const std::string& json, MeetingData& out) {
                     JsonString(item, "title"),
                 };
             }
+        }
+    }
+
+    if (const cJSON* tasks = JsonArray(payload, "desktop_tasks")) {
+        data.desktop_task_count = 0;
+        const cJSON* item = nullptr;
+        cJSON_ArrayForEach(item, tasks) {
+            if (!cJSON_IsObject(item) || data.desktop_task_count >= MeetingData::kMaxDesktopTasks) {
+                continue;
+            }
+            data.desktop_tasks[data.desktop_task_count++] = {
+                JsonString(item, "time"),
+                JsonString(item, "title"),
+                JsonString(item, "owner"),
+            };
+        }
+    }
+
+    if (const cJSON* health = JsonArray(payload, "health_reminders")) {
+        data.health_reminder_count = 0;
+        const cJSON* item = nullptr;
+        cJSON_ArrayForEach(item, health) {
+            if (!cJSON_IsObject(item) || data.health_reminder_count >= MeetingData::kMaxHealthReminders) {
+                continue;
+            }
+            data.health_reminders[data.health_reminder_count++] = {
+                JsonString(item, "time"),
+                JsonString(item, "title"),
+            };
         }
     }
 

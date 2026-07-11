@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import math
 from pathlib import Path
 
 
@@ -33,6 +34,13 @@ def test_render_pages_exposes_preview_contract(tmp_path: Path):
         "06_meeting_reminder.png",
     ]
     assert all(path.exists() for path in paths)
+    assert render.W == 400
+    assert render.H == 300
+    assert render.BOTTOM_SAFE_H == 12
+
+    from PIL import Image
+
+    assert all(Image.open(path).size == (400, 300) for path in paths)
 
 
 def test_layout_check_accepts_generated_pages(tmp_path: Path):
@@ -81,8 +89,51 @@ def test_preview_long_text_dataset_keeps_safe_layout(tmp_path: Path):
 
 def test_firmware_layout_has_safe_text_and_qr_helpers():
     source = (ROOT / "main" / "display" / "pages" / "meeting_assistant_page_adapter.cc").read_text(encoding="utf-8")
+    preview = (ROOT / "tools" / "ui_preview" / "render_ui_preview.py").read_text(encoding="utf-8")
 
     assert "MakeWrappedLabel" in source
-    assert "kQrQuietZone" in source
+    assert "constexpr lv_coord_t kQrQuietZone = 12;" in source
+    assert "kTextSafePad" in source
     assert "LV_LABEL_LONG_WRAP" in source
     assert "LV_SCROLLBAR_MODE_ACTIVE" in source
+    assert "QR_QUIET_ZONE = 12" in preview
+    assert "TEXT_SAFE_PAD = 16" in preview
+    assert "decode_qr_payloads" in preview
+
+
+def test_qr_pages_decode_all_visible_payloads(tmp_path: Path):
+    render = load_module("render_ui_preview", PREVIEW_DIR / "render_ui_preview.py")
+    data = json.loads(DATA_PATH.read_text(encoding="utf-8"))
+    paths = render.render_pages(data, tmp_path)
+
+    decoded_by_page = {
+        path.name: set(render.decode_qr_payloads(path))
+        for path in paths
+        if "materials" in path.name or "reminder" in path.name
+    }
+
+    assert decoded_by_page["04_meeting_materials.png"] == {
+        data["materials"]["url"],
+        data["interaction"]["url"],
+    }
+    assert decoded_by_page["06_meeting_reminder.png"] == {data["reminder"]["url"]}
+
+
+def test_qr_pages_use_large_scan_targets(tmp_path: Path):
+    render = load_module("render_ui_preview", PREVIEW_DIR / "render_ui_preview.py")
+    data = json.loads(DATA_PATH.read_text(encoding="utf-8"))
+    paths = render.render_pages(data, tmp_path)
+
+    decoded_by_text = {}
+    for path in paths:
+        if "materials" not in path.name and "reminder" not in path.name:
+            continue
+        for item in render.decode_qr_items(path):
+            pos = item.position
+            width = math.dist((pos.top_left.x, pos.top_left.y), (pos.top_right.x, pos.top_right.y))
+            height = math.dist((pos.top_left.x, pos.top_left.y), (pos.bottom_left.x, pos.bottom_left.y))
+            decoded_by_text[item.text] = min(width, height)
+
+    assert decoded_by_text[data["materials"]["url"]] >= 118
+    assert decoded_by_text[data["interaction"]["url"]] >= 118
+    assert decoded_by_text[data["reminder"]["url"]] >= 118
