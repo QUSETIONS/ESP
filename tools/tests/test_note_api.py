@@ -135,6 +135,39 @@ def test_notes_events_are_published_once_per_changed_version(server):
     assert events[-1]["data"]["notes"] == []
 
 
+def test_concurrent_noop_does_not_duplicate_notes_event(server, monkeypatch):
+    created = request_json(server + "/notes", "POST", {"title": "A"})
+    note_id = created["note"]["id"]
+    both_mutations_reached = threading.Barrier(2)
+    real_mutate = meeting_server.VersionedNoteStore._mutate
+
+    def coordinated_mutate(self, apply, base_version):
+        both_mutations_reached.wait(timeout=5)
+        return real_mutate(self, apply, base_version)
+
+    monkeypatch.setattr(meeting_server.VersionedNoteStore, "_mutate", coordinated_mutate)
+    responses: list[dict] = []
+    errors: list[Exception] = []
+
+    def patch_completed():
+        try:
+            responses.append(request_json(server + f"/notes/{note_id}", "PATCH", {"completed": True}))
+        except Exception as error:  # pragma: no cover - failures are asserted below.
+            errors.append(error)
+
+    requests = [threading.Thread(target=patch_completed) for _ in range(2)]
+    for request in requests:
+        request.start()
+    for request in requests:
+        request.join(timeout=5)
+
+    assert not errors
+    assert all(not request.is_alive() for request in requests)
+    assert [response["version"] for response in responses] == [2, 2]
+    events = [event for event in sse_events(server + "/api/events") if event["event"] == "notes"]
+    assert [event["data"]["version"] for event in events] == [1, 2]
+
+
 def test_options_advertises_note_mutation_methods(server):
     request = urllib.request.Request(server + "/notes", method="OPTIONS")
     with urllib.request.urlopen(request, timeout=5) as response:
