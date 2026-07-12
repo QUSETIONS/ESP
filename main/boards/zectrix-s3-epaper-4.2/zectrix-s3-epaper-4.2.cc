@@ -871,9 +871,9 @@ private:
                 StartMeetingFetchTask();
                 last_refresh_ms = now_ms;
             }
-            if (wifi_connected_ && now_ms - last_notes_refresh_ms >= kNotesVersionCheckIntervalMs) {
+            if (wifi_connected_ && now_ms - last_notes_refresh_ms_ >= kNotesVersionCheckIntervalMs) {
                 StartNotesFetchTask();
-                last_notes_refresh_ms = now_ms;
+                last_notes_refresh_ms_ = now_ms;
             }
             // Auto-page the meeting assistant while it is the active page. The
             // e-paper refresh cost is only paid when the meeting page is shown;
