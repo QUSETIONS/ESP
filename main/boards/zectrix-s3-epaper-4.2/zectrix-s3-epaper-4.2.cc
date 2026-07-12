@@ -37,6 +37,7 @@
 #include "http.h"
 #include "meeting/meeting_config.h"
 #include "meeting/meeting_data.h"
+#include "notes/note_repository.h"
 #include "rtc_pcf8563.h"
 #include "sdkconfig.h"
 #include "ssid_manager.h"
@@ -54,6 +55,7 @@ constexpr int kReminderLeadMinutes = 10;
 constexpr int kReminderHoldMinutes = 5;
 constexpr int kMeetingTimedUpdateIntervalMs = 30000;
 constexpr int kMeetingVersionCheckIntervalMs = 5000;
+constexpr int kNotesVersionCheckIntervalMs = 5000;
 constexpr int kMeetingTaskTickMs = 1000;
 // Auto-paging of the meeting assistant: only ticks while the meeting page is
 // active, so the sticky-note home / lab pages keep their static e-paper. The
@@ -317,6 +319,8 @@ private:
             std::lock_guard<std::mutex> lock(meeting_data_mutex_);
             meeting_data_ = MakeDefaultMeetingData();
         }
+        gotim::NoteSnapshot note_snapshot;
+        note_repository_.Load(&note_snapshot);
         ApplyTimedMeetingState(true);
         RefreshClockLabels();
         StartTimedMeetingTask();
@@ -600,6 +604,7 @@ private:
                 }
                 NotifyNetworkEvent(NetworkEvent::Connected, wifi.GetSsid());
                 StartMeetingFetchTask();
+                StartNotesFetchTask();
                 break;
             case WifiEvent::Disconnected:
                 ESP_LOGW(kTag, "Wi-Fi disconnected");
@@ -866,6 +871,10 @@ private:
                 StartMeetingFetchTask();
                 last_refresh_ms = now_ms;
             }
+            if (wifi_connected_ && now_ms - last_notes_refresh_ms >= kNotesVersionCheckIntervalMs) {
+                StartNotesFetchTask();
+                last_notes_refresh_ms = now_ms;
+            }
             // Auto-page the meeting assistant while it is the active page. The
             // e-paper refresh cost is only paid when the meeting page is shown;
             // the sticky-note home and lab pages are left untouched.
@@ -1026,6 +1035,131 @@ private:
             }
         }
         return true;
+    }
+
+    static void NotesFetchTaskEntry(void* arg) {
+        static_cast<CustomBoard*>(arg)->NotesFetchTask();
+        vTaskDelete(nullptr);
+    }
+
+    void StartNotesFetchTask() {
+        if (notes_fetch_task_ != nullptr) {
+            return;
+        }
+        if (xTaskCreate(NotesFetchTaskEntry, "notes_fetch", 8192, this, 4,
+                        &notes_fetch_task_) != pdPASS) {
+            notes_fetch_task_ = nullptr;
+            ESP_LOGE(kTag, "Failed to create notes fetch task");
+        }
+    }
+
+    void NotesFetchTask() {
+        uint64_t remote_version = 0;
+        if (!FetchNotesVersionOnce(remote_version)) {
+            notes_fetch_task_ = nullptr;
+            return;
+        }
+        if (remote_version <= note_repository_.snapshot().version) {
+            ESP_LOGD(kTag, "notes version unchanged: remote=%llu local=%llu",
+                     static_cast<unsigned long long>(remote_version),
+                     static_cast<unsigned long long>(note_repository_.snapshot().version));
+            notes_fetch_task_ = nullptr;
+            return;
+        }
+        if (!FetchNotesDataOnce()) {
+            ESP_LOGW(kTag, "notes snapshot fetch failed");
+        }
+        notes_fetch_task_ = nullptr;
+    }
+
+    bool FetchNotesVersionOnce(uint64_t& remote_version) {
+        auto http = network_.CreateHttp();
+        if (!http) return false;
+        std::string url = GetMeetingAssistantUrl();
+        const std::string current_suffix = "/meeting/current";
+        const size_t suffix_pos = url.rfind(current_suffix);
+        if (suffix_pos != std::string::npos && suffix_pos + current_suffix.size() == url.size()) {
+            url.replace(suffix_pos, current_suffix.size(), "/notes/version");
+        } else {
+            const size_t slash = url.rfind('/');
+            url = (slash == std::string::npos ? url : url.substr(0, slash)) + "/notes/version";
+        }
+        http->SetTimeout(5000);
+        http->SetHeader("User-Agent", "ZecTrixNotes/0.1");
+        http->SetKeepAlive(false);
+        if (!http->Open("GET", url)) return false;
+        const std::string body = http->ReadAll();
+        const int status = http->GetStatusCode();
+        http->Close();
+        if (status < 200 || status >= 300 || body.empty()) return false;
+        cJSON* root = cJSON_ParseWithLength(body.c_str(), body.size());
+        if (root == nullptr) return false;
+        const cJSON* version = cJSON_GetObjectItemCaseSensitive(root, "version");
+        const bool valid = cJSON_IsNumber(version) && version->valuedouble >= 0;
+        if (valid) remote_version = static_cast<uint64_t>(version->valuedouble);
+        cJSON_Delete(root);
+        return valid;
+    }
+
+    bool FetchNotesDataOnce() {
+        auto http = network_.CreateHttp();
+        if (!http) return false;
+        std::string url = GetMeetingAssistantUrl();
+        const std::string current_suffix = "/meeting/current";
+        const size_t suffix_pos = url.rfind(current_suffix);
+        if (suffix_pos != std::string::npos && suffix_pos + current_suffix.size() == url.size()) {
+            url.replace(suffix_pos, current_suffix.size(), "/notes");
+        } else {
+            const size_t slash = url.rfind('/');
+            url = (slash == std::string::npos ? url : url.substr(0, slash)) + "/notes";
+        }
+        http->SetTimeout(10000);
+        http->SetHeader("User-Agent", "ZecTrixNotes/0.1");
+        http->SetKeepAlive(false);
+        if (!http->Open("GET", url)) return false;
+        const std::string body = http->ReadAll();
+        const int status = http->GetStatusCode();
+        http->Close();
+        if (status < 200 || status >= 300 || body.empty()) return false;
+
+        cJSON* root = cJSON_ParseWithLength(body.c_str(), body.size());
+        if (root == nullptr) return false;
+        const cJSON* version = cJSON_GetObjectItemCaseSensitive(root, "version");
+        const cJSON* notes = cJSON_GetObjectItemCaseSensitive(root, "notes");
+        bool valid = cJSON_IsNumber(version) && version->valuedouble >= 0 && cJSON_IsArray(notes);
+        gotim::NoteSnapshot snapshot;
+        if (valid) {
+            const int raw_count = cJSON_GetArraySize(notes);
+            const size_t count = raw_count < 0 ? 0 : static_cast<size_t>(raw_count);
+            valid = raw_count >= 0 && !(count > gotim::kMaxNotes);
+            snapshot.version = static_cast<uint64_t>(version->valuedouble);
+            snapshot.count = static_cast<uint16_t>(count);
+            for (int index = 0; valid && index < count; ++index) {
+                const cJSON* item = cJSON_GetArrayItem(notes, index);
+                const cJSON* title = cJSON_GetObjectItemCaseSensitive(item, "title");
+                const cJSON* body = cJSON_GetObjectItemCaseSensitive(item, "body");
+                const cJSON* reminder = cJSON_GetObjectItemCaseSensitive(item, "remind_at");
+                if (!cJSON_IsObject(item) || !cJSON_IsString(title) ||
+                    !cJSON_IsString(body)) {
+                    valid = false;
+                    break;
+                }
+                const std::string reminder_text = cJSON_IsString(reminder) ? reminder->valuestring : "";
+                gotim::NoteData& note = snapshot.notes[index];
+                if (!gotim::SetNoteText(&note, title->valuestring, body->valuestring,
+                                        reminder_text)) {
+                    valid = false;
+                    break;
+                }
+                note.order = static_cast<uint16_t>(index);
+                const cJSON* completed = cJSON_GetObjectItemCaseSensitive(item, "completed");
+                note.completed = cJSON_IsBool(completed) && cJSON_IsTrue(completed);
+                note.delivered = false;
+            }
+        }
+        cJSON_Delete(root);
+        if (!valid) return false;
+        return note_repository_.ReplaceIfNewer(snapshot);
     }
 
     void InitializeButtons() {
@@ -1214,6 +1348,9 @@ private:
     uint64_t last_applied_meeting_version_ = 0;
     bool has_applied_meeting_version_ = false;
     TaskHandle_t meeting_fetch_task_ = nullptr;
+    TaskHandle_t notes_fetch_task_ = nullptr;
+    int64_t last_notes_refresh_ms_ = 0;
+    gotim::NoteRepository note_repository_;
     TaskHandle_t timed_meeting_task_ = nullptr;
     TaskHandle_t wifi_fallback_task_ = nullptr;
     BoardUiMode ui_mode_ = BoardUiMode::StickyNote;
