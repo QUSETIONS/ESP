@@ -69,8 +69,9 @@ constexpr int kWifiConfigFallbackMs = 30000;
 bool JsonUInt64Strict(const cJSON* item, uint64_t* value) {
     if (item == nullptr || value == nullptr || !cJSON_IsNumber(item)) return false;
     const double number = item->valuedouble;
+    constexpr long double kExclusiveUint64Limit = 18446744073709551616.0L;  // 2^64
     if (!std::isfinite(number) || number < 0 || std::floor(number) != number ||
-        static_cast<long double>(number) > static_cast<long double>(UINT64_MAX)) {
+        static_cast<long double>(number) >= kExclusiveUint64Limit) {
         return false;
     }
     *value = static_cast<uint64_t>(number);
