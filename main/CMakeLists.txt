@@ -17,6 +17,8 @@ set(SOURCES
     "display/pages/meeting_assistant_page_adapter.cc"
     "meeting/meeting_config.cc"
     "meeting/meeting_data.cc"
+    "notes/note_data.cc"
+    "notes/note_repository.cc"
     "ble/ble_meeting_server.cc"
     "display/lvgl_display/lvgl_display.cc"
     "display/lvgl_display/lvgl_theme.cc"
