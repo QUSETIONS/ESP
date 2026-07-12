@@ -347,7 +347,35 @@ EDITOR_HTML = r"""<!doctype html>
       color: var(--red);
     }
 
-    @media (max-width: 700px) { .notesLayout { grid-template-columns: 1fr; } }
+    nav { display: flex; gap: 8px; padding: 12px 0 0; }
+    nav button { min-height: 34px; padding: 6px 14px; background: transparent; color: var(--ink); border-color: var(--line); }
+    nav button[aria-current="page"] { background: var(--ink); color: #fffdf7; }
+    .notesView { padding-top: 18px; }
+    .notesHeader { display: flex; justify-content: space-between; align-items: end; gap: 12px; margin-bottom: 12px; }
+    .notesHeader h2 { margin: 0; font-size: 20px; }
+    .notesHeader p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+    .notesLayout { display: grid; grid-template-columns: minmax(230px, 0.72fr) minmax(0, 1.28fr); gap: 14px; align-items: start; }
+    .notesListPanel, .noteFormPanel { min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); }
+    .notesListPanel, .noteFormPanel { overflow: hidden; }
+    .notesListHead, .noteFormHead { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); background: rgba(247, 244, 234, 0.72); }
+    .notesListHead strong, .noteFormHead strong { font-size: 14px; }
+    .notesListHead span, .noteFormHead span, .byteCount { color: var(--muted); font-size: 11px; }
+    .notesList { display: grid; gap: 6px; padding: 10px; }
+    .noteRow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 8px; border: 1px solid transparent; border-radius: 6px; background: #fffefa; }
+    .noteRow.selected { border-color: var(--green); background: #edf5ef; }
+    .noteSelect { min-width: 0; padding: 5px 0; border: 0; background: transparent; color: var(--ink); text-align: left; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .noteSelect.completed { color: var(--muted); text-decoration: line-through; }
+    .noteMeta { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .noteRowActions { display: flex; gap: 4px; }
+    .iconButton { width: 30px; min-height: 30px; padding: 4px; border-color: var(--line); background: transparent; color: var(--ink); font-size: 13px; }
+    .noteEmpty { padding: 22px 14px; color: var(--muted); font-size: 13px; text-align: center; }
+    .noteForm { display: grid; gap: 12px; padding: 14px; }
+    .noteForm textarea { min-height: 180px; max-height: 42vh; font-family: inherit; font-size: 14px; }
+    .noteCheck { display: flex; align-items: center; gap: 8px; color: var(--ink); font-size: 13px; }
+    .noteCheck input { width: 18px; height: 18px; accent-color: var(--green); }
+    .noteError { min-height: 20px; color: var(--red); font-size: 12px; line-height: 1.4; }
+    .notesHidden { display: none; }
+    @media (max-width: 700px) { .notesLayout { grid-template-columns: 1fr; } .notesHeader { align-items: start; flex-direction: column; } }
 
     @media (max-width: 860px) {
       .topbar,
@@ -397,8 +425,11 @@ EDITOR_HTML = r"""<!doctype html>
       <div id="status" class="status">正在读取会议数据...</div>
     </header>
 
-    <nav><button id="notesTab" onclick="showNotes()">便签</button></nav>
-    <section class="layout">
+    <nav>
+      <button id="meetingTab" aria-current="page" onclick="showMeeting()">会议控制台</button>
+      <button id="notesTab" onclick="showNotes()">便利贴</button>
+    </nav>
+    <section id="meetingView" class="layout">
       <div class="stack">
         <section class="panel">
           <div class="panelHead">
@@ -533,7 +564,13 @@ EDITOR_HTML = r"""<!doctype html>
         </section>
       </aside>
     </section>
-    <section id="notesView" hidden><div class="notesLayout"><div id="notesList"></div><p id="notesListEmpty">暂无便签</p><div><p id="noteEditorEmpty">请选择便签</p><form id="noteEditor" onsubmit="saveNote(event)"><input id="noteTitle"><span id="noteTitleBytes"></span><textarea id="noteBody"></textarea><span id="noteBodyBytes"></span><input id="noteCompleted" type="checkbox"><input id="noteRemindAt" type="datetime-local"><div id="noteError"></div><button id="saveNoteButton">保存</button><button id="deleteNoteButton" type="button" onclick="deleteNote()">删除</button><button id="reloadStaleNote" type="button" onclick="reloadSelectedNote()">重载</button></form><button id="newNote" onclick="selectNote(null)">新建</button></div></div></section>
+    <section id="notesView" class="notesView notesHidden">
+      <div class="notesHeader"><div><h2>我的便利贴</h2><p>保存在后台，设备联网后自动同步</p></div><button id="newNote" class="positive" type="button" onclick="selectNote(null)">新建便利贴</button></div>
+      <div class="notesLayout">
+        <section class="notesListPanel" aria-label="便利贴列表"><div class="notesListHead"><strong>便签列表</strong><span id="notesVersion">v0</span></div><div id="notesList" class="notesList"></div><p id="notesListEmpty" class="noteEmpty" hidden>还没有便利贴</p></section>
+        <section class="noteFormPanel" aria-label="便利贴编辑器"><div class="noteFormHead"><strong id="noteEditorTitle">编辑便利贴</strong><span id="noteEditorState">未选择</span></div><p id="noteEditorEmpty" class="noteEmpty">选择一条便利贴，或新建一条。</p><form id="noteEditor" class="noteForm" onsubmit="saveNote(event)" hidden><div class="field"><label for="noteTitle">标题</label><input id="noteTitle" maxlength="48" autocomplete="off"><span id="noteTitleBytes" class="byteCount">0 / 48 bytes</span></div><div class="field"><label for="noteBody">内容</label><textarea id="noteBody" maxlength="384"></textarea><span id="noteBodyBytes" class="byteCount">0 / 384 bytes</span></div><label class="noteCheck"><input id="noteCompleted" type="checkbox">已完成</label><div class="field"><label for="noteRemindAt">提醒时间</label><input id="noteRemindAt" type="datetime-local"></div><div id="noteError" class="noteError" role="alert"></div><div class="actions"><button id="saveNoteButton" class="positive" type="submit">保存</button><button id="deleteNoteButton" class="secondary" type="button" onclick="deleteNote()">删除</button><button id="reloadStaleNote" class="secondary" type="button" onclick="reloadSelectedNote()" hidden>重新载入</button></div></form></section>
+      </div>
+    </section>
   </main>
   <script>
     let currentMeeting = {};
@@ -544,7 +581,20 @@ EDITOR_HTML = r"""<!doctype html>
     let recordingSequence = 0;
     let eventSource = null, notesState={version:0,notes:[]}, selectedNoteId=null, noteFormDirty=false;
     const MAX_NOTE_TITLE_BYTES = 48, MAX_NOTE_BODY_BYTES = 384;
-    function showNotes(){document.getElementById("notesView").hidden=false;loadNotes();}
+    function showMeeting() {
+      document.getElementById("meetingView").classList.remove("notesHidden");
+      document.getElementById("notesView").classList.add("notesHidden");
+      document.getElementById("meetingTab").setAttribute("aria-current", "page");
+      document.getElementById("notesTab").removeAttribute("aria-current");
+    }
+
+    function showNotes() {
+      document.getElementById("meetingView").classList.add("notesHidden");
+      document.getElementById("notesView").classList.remove("notesHidden");
+      document.getElementById("notesTab").setAttribute("aria-current", "page");
+      document.getElementById("meetingTab").removeAttribute("aria-current");
+      loadNotes();
+    }
 
     function setRecordingButtons(state) {
       document.getElementById("startRecording").disabled = state !== "idle";
@@ -640,18 +690,138 @@ EDITOR_HTML = r"""<!doctype html>
       return payload;
     }
 
-    function setNoteError(message=""){document.getElementById("noteError").textContent=message;}
-    function noteSize(v){return new TextEncoder().encode(v).length;}
-    function validateNoteForm(){if(noteSize(noteTitle.value)>MAX_NOTE_TITLE_BYTES||noteSize(noteBody.value)>MAX_NOTE_BODY_BYTES)throw new Error("超过 UTF-8 字节限制");}
-    function applyNotesSnapshot(data,preserveDirty=false){notesState=data;renderNotes();if (!preserveDirty || !noteFormDirty){const n=data.notes.find(x=>x.id===selectedNoteId);if(n)selectNote(n.id);}}
-    async function loadNotes({preserveDirty=false}={}){try{applyNotesSnapshot(await fetchJson("/notes"),preserveDirty);}catch(error){setNoteError(error.message);}}
-    function renderNotes(){notesListEmpty.hidden=!!notesState.notes.length;notesList.innerHTML=notesState.notes.map((n,i)=>`<div><button onclick="selectNote('${n.id}')">${escapeHtml(n.title||"无标题")}</button><button title="上移" onclick="moveNote('${n.id}',-1)">↑</button><button title="下移" onclick="moveNote('${n.id}',1)">↓</button><button title="删除" onclick="deleteNote('${n.id}')">×</button><button onclick="toggleNote('${n.id}')">完成</button></div>`).join("");}
-    function selectNote(id){selectedNoteId=id;const n=notesState.notes.find(x=>x.id===id)||{};noteTitle.value=n.title||"";noteBody.value=n.body||"";noteCompleted.checked=!!n.completed;noteRemindAt.value=n.remind_at?n.remind_at.slice(0,16):"";noteFormDirty=false;}
-    async function saveNote(e){e.preventDefault();try{validateNoteForm();const body=JSON.stringify({title:noteTitle.value,body:noteBody.value,completed:noteCompleted.checked,remind_at:noteRemindAt.value?new Date(noteRemindAt.value).toISOString():null,base_version:notesState.version});const p=await fetchJson(selectedNoteId?`/notes/${selectedNoteId}`:"/notes",{method: selectedNoteId ? "PATCH" : "POST",body});selectedNoteId=p.note?.id||selectedNoteId;applyNotesSnapshot(p.data);}catch(error){if(error.status === 409){applyNotesSnapshot(error.payload.data, true);}setNoteError(error.message);}}
-    async function toggleNote(id){const n=notesState.notes.find(x=>x.id===id);const p=await fetchJson(`/notes/${id}`,{method:"PATCH",body:JSON.stringify({completed:!n.completed,base_version:notesState.version})});applyNotesSnapshot(p.data,true);}
-    async function deleteNote(id=selectedNoteId){if(!id||!window.confirm("删除？"))return;const p=await fetchJson(`/notes/${id}`,{method: "DELETE", body:JSON.stringify({base_version:notesState.version})});applyNotesSnapshot(p.data);}
-    async function moveNote(id,d){const ids=notesState.notes.map(n=>n.id),a=ids.indexOf(id),b=a+d;if(b<0||b>=ids.length)return;[ids[a],ids[b]]=[ids[b],ids[a]];const p=await fetchJson("/notes/reorder",{method: "PUT", body:JSON.stringify({ids,base_version:notesState.version})});applyNotesSnapshot(p.data,true);}
-    function reloadSelectedNote(){noteFormDirty=false;applyNotesSnapshot(notesState);}
+    function setNoteError(message = "") {
+      document.getElementById("noteError").textContent = message;
+    }
+
+    function noteSize(value) {
+      return new TextEncoder().encode(value).length;
+    }
+
+    function updateNoteByteCounts() {
+      document.getElementById("noteTitleBytes").textContent = `${noteSize(noteTitle.value)} / ${MAX_NOTE_TITLE_BYTES} bytes`;
+      document.getElementById("noteBodyBytes").textContent = `${noteSize(noteBody.value)} / ${MAX_NOTE_BODY_BYTES} bytes`;
+    }
+
+    function validateNoteForm() {
+      updateNoteByteCounts();
+      if (noteSize(noteTitle.value) > MAX_NOTE_TITLE_BYTES) throw new Error("标题超过 UTF-8 字节限制");
+      if (noteSize(noteBody.value) > MAX_NOTE_BODY_BYTES) throw new Error("内容超过 UTF-8 字节限制");
+    }
+
+    function applyNotesSnapshot(data, preserveDirty = false) {
+      notesState = data || {version: 0, notes: []};
+      document.getElementById("notesVersion").textContent = `v${notesState.version || 0}`;
+      renderNotes();
+      if (!preserveDirty || !noteFormDirty) {
+        const note = notesState.notes.find((item) => item.id === selectedNoteId);
+        if (note) selectNote(note.id);
+        else if (selectedNoteId) selectNote(null);
+      }
+    }
+
+    async function loadNotes({preserveDirty = false} = {}) {
+      try {
+        applyNotesSnapshot(await fetchJson("/notes"), preserveDirty);
+      } catch (error) {
+        setNoteError(error.message);
+      }
+    }
+
+    function renderNotes() {
+      const list = document.getElementById("notesList");
+      const empty = document.getElementById("notesListEmpty");
+      empty.hidden = notesState.notes.length > 0;
+      list.innerHTML = notesState.notes.map((note, index) => {
+        const reminder = note.remind_at ? `提醒 ${escapeHtml(new Date(note.remind_at).toLocaleString())}` : "无提醒";
+        return `<div class="noteRow ${note.id === selectedNoteId ? "selected" : ""}"><button class="noteSelect ${note.completed ? "completed" : ""}" type="button" onclick="selectNote('${note.id}')">${escapeHtml(note.title || "无标题")}<span class="noteMeta">${escapeHtml(reminder)}${note.completed ? " · 已完成" : ""}</span></button><div class="noteRowActions"><button class="iconButton" type="button" title="上移" aria-label="上移" onclick="moveNote('${note.id}', -1)">↑</button><button class="iconButton" type="button" title="下移" aria-label="下移" onclick="moveNote('${note.id}', 1)">↓</button><button class="iconButton" type="button" title="删除" aria-label="删除" onclick="deleteNote('${note.id}')">×</button></div></div>`;
+      }).join("");
+    }
+
+    function selectNote(id) {
+      selectedNoteId = id;
+      const note = notesState.notes.find((item) => item.id === id);
+      const form = document.getElementById("noteEditor");
+      const empty = document.getElementById("noteEditorEmpty");
+      form.hidden = !id && id !== null;
+      if (id === null) {
+        form.hidden = false;
+        empty.hidden = true;
+        noteTitle.value = ""; noteBody.value = ""; noteCompleted.checked = false; noteRemindAt.value = "";
+        document.getElementById("noteEditorTitle").textContent = "新建便利贴";
+        document.getElementById("noteEditorState").textContent = "未保存";
+      } else if (note) {
+        form.hidden = false;
+        empty.hidden = true;
+        noteTitle.value = note.title || ""; noteBody.value = note.body || ""; noteCompleted.checked = !!note.completed; noteRemindAt.value = note.remind_at ? note.remind_at.slice(0, 16) : "";
+        document.getElementById("noteEditorTitle").textContent = "编辑便利贴";
+        document.getElementById("noteEditorState").textContent = note.completed ? "已完成" : "进行中";
+      } else {
+        form.hidden = true;
+        empty.hidden = false;
+        document.getElementById("noteEditorState").textContent = "未选择";
+      }
+      noteFormDirty = false;
+      setNoteError();
+      updateNoteByteCounts();
+      renderNotes();
+    }
+
+    async function saveNote(event) {
+      event.preventDefault();
+      try {
+        validateNoteForm();
+        const payload = {title: noteTitle.value.trim(), body: noteBody.value, completed: noteCompleted.checked, remind_at: noteRemindAt.value ? new Date(noteRemindAt.value).toISOString() : null, base_version: notesState.version};
+        const result = await fetchJson(selectedNoteId ? `/notes/${selectedNoteId}` : "/notes", {method: selectedNoteId ? "PATCH" : "POST", body: JSON.stringify(payload)});
+        selectedNoteId = result.note?.id || selectedNoteId;
+        noteFormDirty = false;
+        applyNotesSnapshot(result.data);
+        setNoteError();
+      } catch (error) {
+        if (error.status === 409) {
+          document.getElementById("reloadStaleNote").hidden = false;
+          applyNotesSnapshot(error.payload.data, true);
+        }
+        setNoteError(error.message);
+      }
+    }
+
+    async function toggleNote(id) {
+      try {
+        const note = notesState.notes.find((item) => item.id === id);
+        if (!note) return;
+        const result = await fetchJson(`/notes/${id}`, {method: "PATCH", body: JSON.stringify({completed: !note.completed, base_version: notesState.version})});
+        applyNotesSnapshot(result.data, true);
+      } catch (error) { setNoteError(error.message); }
+    }
+
+    async function deleteNote(id = selectedNoteId) {
+      if (!id || !window.confirm("删除这条便利贴？")) return;
+      try {
+        const result = await fetchJson(`/notes/${id}`, {method: "DELETE", body: JSON.stringify({base_version: notesState.version})});
+        selectedNoteId = null;
+        applyNotesSnapshot(result.data);
+        selectNote(null);
+      } catch (error) { setNoteError(error.message); }
+    }
+
+    async function moveNote(id, delta) {
+      const ids = notesState.notes.map((note) => note.id);
+      const from = ids.indexOf(id); const to = from + delta;
+      if (from < 0 || to < 0 || to >= ids.length) return;
+      [ids[from], ids[to]] = [ids[to], ids[from]];
+      try {
+        const result = await fetchJson("/notes/reorder", {method: "PUT", body: JSON.stringify({ids, base_version: notesState.version})});
+        applyNotesSnapshot(result.data, true);
+      } catch (error) { setNoteError(error.message); }
+    }
+
+    function reloadSelectedNote() {
+      noteFormDirty = false;
+      document.getElementById("reloadStaleNote").hidden = true;
+      applyNotesSnapshot(notesState);
+    }
+
     function pretty(value) {
       return JSON.stringify(value || [], null, 2);
     }
@@ -868,7 +1038,10 @@ EDITOR_HTML = r"""<!doctype html>
       });
     });
 
-    ["noteTitle","noteBody","noteCompleted","noteRemindAt"].forEach(id=>document.getElementById(id).addEventListener("input",()=>{noteFormDirty = true;}));
+    ["noteTitle", "noteBody", "noteCompleted", "noteRemindAt"].forEach((id) => document.getElementById(id).addEventListener("input", () => {
+      noteFormDirty = true;
+      updateNoteByteCounts();
+    }));
     setRecordingButtons("idle");
     connectEvents();
     loadMeeting();
