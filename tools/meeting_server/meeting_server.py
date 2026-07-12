@@ -349,7 +349,7 @@ EDITOR_HTML = r"""<!doctype html>
 
     nav { display: flex; gap: 8px; padding: 12px 0 0; }
     nav button { min-height: 34px; padding: 6px 14px; background: transparent; color: var(--ink); border-color: var(--line); }
-    nav button[aria-current="page"] { background: var(--ink); color: #fffdf7; }
+    nav button[aria-selected="true"] { background: var(--ink); color: #fffdf7; }
     .notesView { padding-top: 18px; }
     .notesHeader { display: flex; justify-content: space-between; align-items: end; gap: 12px; margin-bottom: 12px; }
     .notesHeader h2 { margin: 0; font-size: 20px; }
@@ -426,10 +426,10 @@ EDITOR_HTML = r"""<!doctype html>
     </header>
 
     <nav role="tablist" aria-label="工作区">
-      <button id="meetingTab" role="tab" aria-selected="true" onclick="showMeeting()">会议控制台</button>
-      <button id="notesTab" role="tab" aria-selected="false" onclick="showNotes()">便利贴</button>
+      <button id="meetingTab" role="tab" aria-selected="true" aria-controls="meetingView" onclick="showMeeting()">会议控制台</button>
+      <button id="notesTab" role="tab" aria-selected="false" aria-controls="notesView" onclick="showNotes()">便利贴</button>
     </nav>
-    <section id="meetingView" class="layout">
+    <section id="meetingView" class="layout" role="tabpanel" aria-labelledby="meetingTab">
       <div class="stack">
         <section class="panel">
           <div class="panelHead">
@@ -564,7 +564,7 @@ EDITOR_HTML = r"""<!doctype html>
         </section>
       </aside>
     </section>
-    <section id="notesView" class="notesView notesHidden">
+    <section id="notesView" class="notesView notesHidden" role="tabpanel" aria-labelledby="notesTab">
       <div class="notesHeader"><div><h2>我的便利贴</h2><p>保存在后台，设备联网后自动同步</p></div><button id="newNote" class="positive" type="button" onclick="selectNote(null)">新建便利贴</button></div>
       <div class="notesLayout">
         <section class="notesListPanel" aria-label="便利贴列表"><div class="notesListHead"><strong>便签列表</strong><span id="notesVersion">v0</span></div><div id="notesList" class="notesList"></div><p id="notesListEmpty" class="noteEmpty" hidden>还没有便利贴</p></section>
