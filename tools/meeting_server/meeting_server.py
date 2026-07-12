@@ -355,7 +355,7 @@ EDITOR_HTML = r"""<!doctype html>
     .notesHeader h2 { margin: 0; font-size: 20px; }
     .notesHeader p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
     .notesLayout { display: grid; grid-template-columns: minmax(230px, 0.72fr) minmax(0, 1.28fr); gap: 14px; align-items: start; }
-    .notesListPanel, .noteFormPanel { min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); }
+    .notesListPanel, .noteFormPanel { min-width: 0; background: transparent; border: 0; border-radius: 0; box-shadow: none; }
     .notesListPanel, .noteFormPanel { overflow: hidden; }
     .notesListHead, .noteFormHead { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); background: rgba(247, 244, 234, 0.72); }
     .notesListHead strong, .noteFormHead strong { font-size: 14px; }
@@ -425,9 +425,9 @@ EDITOR_HTML = r"""<!doctype html>
       <div id="status" class="status">正在读取会议数据...</div>
     </header>
 
-    <nav>
-      <button id="meetingTab" aria-current="page" onclick="showMeeting()">会议控制台</button>
-      <button id="notesTab" onclick="showNotes()">便利贴</button>
+    <nav role="tablist" aria-label="工作区">
+      <button id="meetingTab" role="tab" aria-selected="true" onclick="showMeeting()">会议控制台</button>
+      <button id="notesTab" role="tab" aria-selected="false" onclick="showNotes()">便利贴</button>
     </nav>
     <section id="meetingView" class="layout">
       <div class="stack">
@@ -584,15 +584,15 @@ EDITOR_HTML = r"""<!doctype html>
     function showMeeting() {
       document.getElementById("meetingView").classList.remove("notesHidden");
       document.getElementById("notesView").classList.add("notesHidden");
-      document.getElementById("meetingTab").setAttribute("aria-current", "page");
-      document.getElementById("notesTab").removeAttribute("aria-current");
+      document.getElementById("meetingTab").setAttribute("aria-selected", "true");
+      document.getElementById("notesTab").setAttribute("aria-selected", "false");
     }
 
     function showNotes() {
       document.getElementById("meetingView").classList.add("notesHidden");
       document.getElementById("notesView").classList.remove("notesHidden");
-      document.getElementById("notesTab").setAttribute("aria-current", "page");
-      document.getElementById("meetingTab").removeAttribute("aria-current");
+      document.getElementById("notesTab").setAttribute("aria-selected", "true");
+      document.getElementById("meetingTab").setAttribute("aria-selected", "false");
       loadNotes();
     }
 
@@ -734,7 +734,7 @@ EDITOR_HTML = r"""<!doctype html>
       empty.hidden = notesState.notes.length > 0;
       list.innerHTML = notesState.notes.map((note, index) => {
         const reminder = note.remind_at ? `提醒 ${escapeHtml(new Date(note.remind_at).toLocaleString())}` : "无提醒";
-        return `<div class="noteRow ${note.id === selectedNoteId ? "selected" : ""}"><button class="noteSelect ${note.completed ? "completed" : ""}" type="button" onclick="selectNote('${note.id}')">${escapeHtml(note.title || "无标题")}<span class="noteMeta">${escapeHtml(reminder)}${note.completed ? " · 已完成" : ""}</span></button><div class="noteRowActions"><button class="iconButton" type="button" title="上移" aria-label="上移" onclick="moveNote('${note.id}', -1)">↑</button><button class="iconButton" type="button" title="下移" aria-label="下移" onclick="moveNote('${note.id}', 1)">↓</button><button class="iconButton" type="button" title="删除" aria-label="删除" onclick="deleteNote('${note.id}')">×</button></div></div>`;
+        return `<div class="noteRow ${note.id === selectedNoteId ? "selected" : ""}"><button class="noteSelect ${note.completed ? "completed" : ""}" type="button" onclick="selectNote('${note.id}')">${escapeHtml(note.title || "无标题")}<span class="noteMeta">${escapeHtml(reminder)}${note.completed ? " · 已完成" : ""}</span></button><div class="noteRowActions"><button class="iconButton" type="button" title="上移" aria-label="上移" ${index === 0 ? "disabled" : ""} onclick="moveNote('${note.id}', -1)">↑</button><button class="iconButton" type="button" title="下移" aria-label="下移" ${index === notesState.notes.length - 1 ? "disabled" : ""} onclick="moveNote('${note.id}', 1)">↓</button><button class="iconButton" type="button" title="删除" aria-label="删除" onclick="deleteNote('${note.id}')">×</button></div></div>`;
       }).join("");
     }
 
