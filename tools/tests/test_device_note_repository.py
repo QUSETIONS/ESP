@@ -48,6 +48,16 @@ def test_serialization_contract_uses_lengths_and_crc32_vector():
     assert zlib.crc32(b"123456789") & 0xFFFFFFFF == 0xCBF43926
 
 
+def test_repository_guards_serializer_and_reminder_version_edges():
+    data = read(DATA_SOURCE)
+    repo = read(REPOSITORY_SOURCE)
+    assert "snapshot.count > kMaxNotes" in data
+    assert "title_length > kMaxTitleBytes" in data
+    assert "incoming.delivered = false" in repo
+    assert "UINT64_MAX" in repo
+    assert "note.delivered || note.completed" in repo
+
+
 def test_repository_uses_private_notes_namespace_and_staged_active_commit():
     source = read(REPOSITORY_SOURCE)
 

@@ -85,11 +85,21 @@ esp_err_t NoteRepository::Save(const NoteSnapshot& snapshot) {
 
 bool NoteRepository::ReplaceIfNewer(const NoteSnapshot& candidate) {
     if (!ValidateSnapshot(candidate) || candidate.version <= snapshot_.version) return false;
-    return Save(candidate) == ESP_OK;
+    NoteSnapshot normalized = candidate;
+    const size_t shared_count = std::min<size_t>(snapshot_.count, normalized.count);
+    for (size_t index = 0; index < shared_count; ++index) {
+        const NoteData& previous = snapshot_.notes[index];
+        NoteData& incoming = normalized.notes[index];
+        const bool reminder_changed = previous.reminder_unix_seconds != incoming.reminder_unix_seconds ||
+            previous.reminder_length != incoming.reminder_length ||
+            std::memcmp(previous.reminder.data(), incoming.reminder.data(), kMaxReminderBytes) != 0;
+        if (reminder_changed) incoming.delivered = false;
+    }
+    return Save(normalized) == ESP_OK;
 }
 
 bool NoteRepository::ToggleComplete(size_t index) {
-    if (index >= snapshot_.count) return false;
+    if (index >= snapshot_.count || snapshot_.version == UINT64_MAX) return false;
     NoteSnapshot candidate = snapshot_;
     NoteData& note = candidate.notes[index];
     note.completed = !note.completed;
@@ -99,10 +109,11 @@ bool NoteRepository::ToggleComplete(size_t index) {
 }
 
 bool NoteRepository::MarkDelivered(size_t index, uint64_t now_unix_seconds) {
-    if (index >= snapshot_.count) return false;
+    if (index >= snapshot_.count || snapshot_.version == UINT64_MAX) return false;
     NoteSnapshot candidate = snapshot_;
     NoteData& note = candidate.notes[index];
-    if (note.reminder_unix_seconds == 0 || note.reminder_unix_seconds > now_unix_seconds) return false;
+    if (note.reminder_unix_seconds == 0 || note.reminder_unix_seconds > now_unix_seconds ||
+        note.delivered || note.completed) return false;
     note.delivered = true;
     ++candidate.version;
     return Save(candidate) == ESP_OK;

@@ -113,7 +113,13 @@ bool SetNoteText(NoteData* note, const std::string& title, const std::string& bo
 }
 
 std::vector<uint8_t> SerializeNoteSnapshot(const NoteSnapshot& snapshot) {
-    const uint16_t count = std::min<uint16_t>(snapshot.count, kMaxNotes);
+    if (snapshot.count > kMaxNotes) return {};
+    for (size_t index = 0; index < snapshot.count; ++index) {
+        const NoteData& note = snapshot.notes[index];
+        if (note.title_length > kMaxTitleBytes || note.body_length > kMaxBodyBytes ||
+            note.reminder_length > kMaxReminderBytes) return {};
+    }
+    const uint16_t count = snapshot.count;
     std::vector<uint8_t> payload;
     payload.reserve(32 + count * 32);
     AppendU16(&payload, static_cast<uint16_t>(snapshot.schema_version));
