@@ -2,6 +2,7 @@
 #define STICKY_NOTE_HOME_PAGE_ADAPTER_H
 
 #include "ui_page.h"
+#include "notes/note_data.h"
 
 #include <string>
 
@@ -25,18 +26,25 @@ public:
     void MoveUp();
     void MoveDown();
     Action Confirm();
+    void SetNoteSnapshot(const gotim::NoteSnapshot& snapshot);
+    size_t SelectedNoteIndex() const;
+    bool HasNotes() const;
     void SetNetworkHint(const std::string& title, const std::string& detail, const std::string& hint);
     void SetDateLabel(const std::string& value);
 
 private:
     void UpdateContent();
     void UpdateNetworkHint();
+    void UpdateNoteContent();
     void BuildHome();
     void MakeDeviceStatusPanel();
     lv_obj_t* MakeHomeActionCard(int index, const char* title, const char* subtitle, lv_coord_t x, lv_coord_t y);
 
     bool built_ = false;
     int selected_index_ = 0;
+    gotim::NoteSnapshot note_snapshot_ = {};
+    size_t selected_note_index_ = 0;
+    lv_coord_t note_scroll_offset_ = 0;
     std::string date_label_ = "07/05 周日";
     lv_obj_t* screen_ = nullptr;
     lv_obj_t* time_label_ = nullptr;
@@ -46,6 +54,11 @@ private:
     lv_obj_t* network_title_label_ = nullptr;
     lv_obj_t* network_detail_label_ = nullptr;
     lv_obj_t* network_hint_label_ = nullptr;
+    lv_obj_t* note_section_label_ = nullptr;
+    lv_obj_t* note_time_label_ = nullptr;
+    lv_obj_t* note_title_label_ = nullptr;
+    lv_obj_t* note_body_label_ = nullptr;
+    lv_obj_t* note_next_label_ = nullptr;
     lv_obj_t* menu_rows_[2] = {};
     lv_obj_t* menu_titles_[2] = {};
     lv_obj_t* menu_subtitles_[2] = {};

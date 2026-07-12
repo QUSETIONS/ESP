@@ -10,6 +10,7 @@ namespace {
 constexpr lv_coord_t kPageWidth = 400;
 constexpr lv_coord_t kPageHeight = 300;
 constexpr int kMenuCount = 2;
+constexpr lv_coord_t kNoteScrollStep = 44;
 
 // 4px spacing grid: 4 / 8 / 12 / 16 / 20 / 24
 constexpr lv_coord_t kMargin = 12;
@@ -144,26 +145,48 @@ void MakeHomeHeroCard(lv_obj_t* parent) {
 void MakeNotePaperSurface(lv_obj_t* parent,
                           lv_obj_t** network_title,
                           lv_obj_t** network_detail,
-                          lv_obj_t** network_hint);
+                          lv_obj_t** network_hint,
+                          lv_obj_t** note_section,
+                          lv_obj_t** note_time,
+                          lv_obj_t** note_title,
+                          lv_obj_t** note_body,
+                          lv_obj_t** note_next);
 
 void MakeCurrentNoteStage(lv_obj_t* parent,
                           lv_obj_t** network_title,
                           lv_obj_t** network_detail,
-                          lv_obj_t** network_hint) {
-    MakeNotePaperSurface(parent, network_title, network_detail, network_hint);
+                          lv_obj_t** network_hint,
+                          lv_obj_t** note_section,
+                          lv_obj_t** note_time,
+                          lv_obj_t** note_title,
+                          lv_obj_t** note_body,
+                          lv_obj_t** note_next) {
+    MakeNotePaperSurface(parent, network_title, network_detail, network_hint,
+                         note_section, note_time, note_title, note_body, note_next);
 }
 
 void MakeHomeStickySurface(lv_obj_t* parent,
                            lv_obj_t** network_title,
                            lv_obj_t** network_detail,
-                           lv_obj_t** network_hint) {
-    MakeCurrentNoteStage(parent, network_title, network_detail, network_hint);
+                           lv_obj_t** network_hint,
+                           lv_obj_t** note_section,
+                           lv_obj_t** note_time,
+                           lv_obj_t** note_title,
+                           lv_obj_t** note_body,
+                           lv_obj_t** note_next) {
+    MakeCurrentNoteStage(parent, network_title, network_detail, network_hint,
+                         note_section, note_time, note_title, note_body, note_next);
 }
 
 void MakeNotePaperSurface(lv_obj_t* parent,
                           lv_obj_t** network_title,
                           lv_obj_t** network_detail,
-                          lv_obj_t** network_hint) {
+                          lv_obj_t** network_hint,
+                          lv_obj_t** note_section,
+                          lv_obj_t** note_time,
+                          lv_obj_t** note_title,
+                          lv_obj_t** note_body,
+                          lv_obj_t** note_next) {
     const lv_coord_t x = 38;
     const lv_coord_t y = kHeaderHeight + 8;
     const lv_coord_t w = kPageWidth - 50;
@@ -179,19 +202,20 @@ void MakeNotePaperSurface(lv_obj_t* parent,
     MakeFilledBlock(surface, w - 62, 12, 38, 4, 0);
 
     const lv_coord_t ix = 16;
-    MakeLabel(surface, "今日便签", ix, 12, 80, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    *note_section = MakeLabel(surface, "今日便签", ix, 12, 80, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
     lv_obj_t* time_box = MakeFilledBlock(surface, ix, 30, 62, 28, 0);
-    lv_obj_t* time = lv_label_create(time_box);
-    SetFont(time, &BUILTIN_TEXT_FONT);
-    lv_obj_set_style_text_color(time, lv_color_white(), 0);
-    lv_label_set_text(time, "09:30");
-    lv_obj_center(time);
-    MakeLabel(surface, "理事会工作报告", ix + 76, 28, w - 112, &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_WRAP);
-    MakeLabel(surface, "保留便利贴原功能", ix, 64, w - 32, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
-
-    MakeLabel(surface, "下一项", ix, 92, 56, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
-    MakeLabel(surface, "10:30  审议与现场表决", ix + 60, 88, 240,
-              &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
+    *note_time = lv_label_create(time_box);
+    SetFont(*note_time, &BUILTIN_TEXT_FONT);
+    lv_obj_set_style_text_color(*note_time, lv_color_white(), 0);
+    lv_label_set_text(*note_time, "09:30");
+    lv_obj_center(*note_time);
+    *note_title = MakeLabel(surface, "理事会工作报告", ix + 76, 28, w - 112,
+                            &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_WRAP);
+    *note_body = MakeLabel(surface, "保留便利贴原功能", ix, 64, w - 32,
+                           &BUILTIN_TEXT_FONT, LV_LABEL_LONG_WRAP);
+    lv_obj_set_height(*note_body, 42);
+    *note_next = MakeLabel(surface, "下一项  10:30  审议与现场表决", ix, 88, 300,
+                           &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
 
     MakeLabel(surface, "JUL 05 周日", ix, 144, 150, &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
     *network_title = MakeLabel(surface, "离线", ix + 170, 145, 44, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
@@ -253,7 +277,9 @@ void StickyNoteHomePageAdapter::BuildHome() {
     lv_obj_align(time_label_, LV_ALIGN_RIGHT_MID, -kTextSafePad, 0);
 
     MakeHomeBinderRail(screen_);
-    MakeHomeStickySurface(screen_, &network_title_label_, &network_detail_label_, &network_hint_label_);
+    MakeHomeStickySurface(screen_, &network_title_label_, &network_detail_label_, &network_hint_label_,
+                          &note_section_label_, &note_time_label_, &note_title_label_,
+                          &note_body_label_, &note_next_label_);
 
     menu_rows_[0] = MakeHomeActionCard(0, "便利贴", "今日待办", 54, 242);
     menu_rows_[1] = MakeHomeActionCard(1, "实验室", "会议助手", 204, 242);
@@ -296,20 +322,62 @@ void StickyNoteHomePageAdapter::OnShow() {
 }
 
 void StickyNoteHomePageAdapter::MoveUp() {
+    if (HasNotes()) {
+        if (note_scroll_offset_ > 0) {
+            note_scroll_offset_ = 0;
+        } else if (selected_note_index_ > 0) {
+            --selected_note_index_;
+        }
+        UpdateContent();
+        return;
+    }
     selected_index_ = (selected_index_ + kMenuCount - 1) % kMenuCount;
     UpdateContent();
 }
 
 void StickyNoteHomePageAdapter::MoveDown() {
+    if (HasNotes()) {
+        const auto& note = note_snapshot_.notes[selected_note_index_];
+        if (note.body_length > 80 && note_scroll_offset_ == 0) {
+            note_scroll_offset_ = kNoteScrollStep;
+        } else if (selected_note_index_ + 1 < note_snapshot_.count) {
+            ++selected_note_index_;
+            note_scroll_offset_ = 0;
+        }
+        UpdateContent();
+        return;
+    }
     selected_index_ = (selected_index_ + 1) % kMenuCount;
     UpdateContent();
 }
 
 StickyNoteHomePageAdapter::Action StickyNoteHomePageAdapter::Confirm() {
+    if (HasNotes()) {
+        return Action::None;
+    }
     if (selected_index_ == 1) {
         return Action::OpenLab;
     }
     return Action::None;
+}
+
+void StickyNoteHomePageAdapter::SetNoteSnapshot(const gotim::NoteSnapshot& snapshot) {
+    note_snapshot_ = snapshot;
+    if (note_snapshot_.count == 0) {
+        selected_note_index_ = 0;
+    } else if (selected_note_index_ >= note_snapshot_.count) {
+        selected_note_index_ = note_snapshot_.count - 1;
+    }
+    note_scroll_offset_ = 0;
+    UpdateContent();
+}
+
+size_t StickyNoteHomePageAdapter::SelectedNoteIndex() const {
+    return selected_note_index_;
+}
+
+bool StickyNoteHomePageAdapter::HasNotes() const {
+    return note_snapshot_.count > 0;
 }
 
 void StickyNoteHomePageAdapter::SetNetworkHint(const std::string& title,
@@ -325,6 +393,30 @@ void StickyNoteHomePageAdapter::SetDateLabel(const std::string& value) {
     date_label_ = value;
     if (built_ && time_label_ != nullptr) {
         lv_label_set_text(time_label_, date_label_.c_str());
+    }
+}
+
+void StickyNoteHomePageAdapter::UpdateNoteContent() {
+    if (note_section_label_ == nullptr || note_title_label_ == nullptr || note_body_label_ == nullptr ||
+        note_next_label_ == nullptr || note_snapshot_.count == 0) {
+        return;
+    }
+    const auto& note = note_snapshot_.notes[selected_note_index_];
+    const std::string title(note.title.data(), note.title_length);
+    const std::string body(note.body.data(), note.body_length);
+    lv_label_set_text(note_section_label_, note.completed ? "已完成便签" : "今日便签");
+    lv_label_set_text(note_title_label_, title.empty() ? "无标题" : title.c_str());
+    lv_label_set_text(note_body_label_, body.empty() ? "无内容" : body.c_str());
+    lv_obj_set_y(note_body_label_, 64 - note_scroll_offset_);
+    if (selected_note_index_ + 1 < note_snapshot_.count) {
+        const auto& next = note_snapshot_.notes[selected_note_index_ + 1];
+        const std::string next_title(next.title.data(), next.title_length);
+        lv_label_set_text(note_next_label_, ("下一项  " + (next_title.empty() ? "无标题" : next_title)).c_str());
+    } else {
+        lv_label_set_text(note_next_label_, "下一项  已是最后一条");
+    }
+    if (note_time_label_ != nullptr) {
+        lv_label_set_text(note_time_label_, note.reminder_length > 0 ? note.reminder.data() : "现在");
     }
 }
 
@@ -351,6 +443,7 @@ void StickyNoteHomePageAdapter::UpdateContent() {
         lv_label_set_text(time_label_, date_label_.c_str());
     }
     UpdateNetworkHint();
+    UpdateNoteContent();
     for (int i = 0; i < kMenuCount; ++i) {
         const bool selected = i == selected_index_;
         if (menu_rows_[i] != nullptr) {

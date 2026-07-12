@@ -335,6 +335,7 @@ private:
         }
         gotim::NoteSnapshot note_snapshot;
         note_repository_.Load(&note_snapshot);
+        display_->SetStickyNoteSnapshot(note_repository_.snapshot());
         ApplyTimedMeetingState(true);
         RefreshClockLabels();
         StartTimedMeetingTask();
@@ -1086,6 +1087,11 @@ private:
         }
         if (!FetchNotesDataOnce()) {
             ESP_LOGW(kTag, "notes snapshot fetch failed");
+        } else if (display_ != nullptr) {
+            display_->SetStickyNoteSnapshot(note_repository_.snapshot());
+            if (display_->IsStickyNoteHomePageActive()) {
+                display_->RequestUrgentRefresh();
+            }
         }
         FinishNotesFetchTask();
     }
@@ -1226,7 +1232,13 @@ private:
                 }
                 return;
             }
-            if (display_->StickyNoteHomeConfirmOpenLab()) {
+            if (display_->StickyNoteHomeHasNotes()) {
+                const size_t index = display_->StickyNoteHomeSelectedNoteIndex();
+                if (note_repository_.ToggleComplete(index)) {
+                    display_->SetStickyNoteSnapshot(note_repository_.snapshot());
+                }
+                display_->RequestUrgentRefresh();
+            } else if (display_->StickyNoteHomeConfirmOpenLab()) {
                 EnterLabFeaturesMode();
             } else {
                 display_->RequestUrgentRefresh();
@@ -1240,6 +1252,10 @@ private:
             }
             if (ui_mode_ == BoardUiMode::LabFeatures) {
                 EnterNormalMode();
+                return;
+            }
+            if (ui_mode_ == BoardUiMode::StickyNote) {
+                EnterLabFeaturesMode();
                 return;
             }
         });

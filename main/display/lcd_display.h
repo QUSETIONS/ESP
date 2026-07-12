@@ -3,6 +3,7 @@
 
 #include "lvgl_display.h"
 #include "meeting/meeting_data.h"
+#include "notes/note_data.h"
 #include "ui_page_registry.h"
 
 #include <esp_lcd_panel_io.h>
@@ -59,6 +60,9 @@ public:
     void StickyNoteHomeMoveUp();
     void StickyNoteHomeMoveDown();
     bool StickyNoteHomeConfirmOpenLab();
+    void SetStickyNoteSnapshot(const gotim::NoteSnapshot& snapshot);
+    size_t StickyNoteHomeSelectedNoteIndex() const;
+    bool StickyNoteHomeHasNotes() const;
     void SetStickyNoteNetworkHint(const std::string& title, const std::string& detail, const std::string& hint);
     void ShowLabFeaturesPage();
     bool IsLabFeaturesPageActive();

@@ -193,6 +193,22 @@ bool LcdDisplay::StickyNoteHomeConfirmOpenLab() {
     return sticky_note_home_page_adapter_->Confirm() == StickyNoteHomePageAdapter::Action::OpenLab;
 }
 
+void LcdDisplay::SetStickyNoteSnapshot(const gotim::NoteSnapshot& snapshot) {
+    DisplayLockGuard lock(this);
+    if (sticky_note_home_page_adapter_ != nullptr) {
+        sticky_note_home_page_adapter_->SetNoteSnapshot(snapshot);
+    }
+}
+
+size_t LcdDisplay::StickyNoteHomeSelectedNoteIndex() const {
+    if (sticky_note_home_page_adapter_ == nullptr) return 0;
+    return sticky_note_home_page_adapter_->SelectedNoteIndex();
+}
+
+bool LcdDisplay::StickyNoteHomeHasNotes() const {
+    return sticky_note_home_page_adapter_ != nullptr && sticky_note_home_page_adapter_->HasNotes();
+}
+
 void LcdDisplay::SetStickyNoteNetworkHint(const std::string& title,
                                           const std::string& detail,
                                           const std::string& hint) {
