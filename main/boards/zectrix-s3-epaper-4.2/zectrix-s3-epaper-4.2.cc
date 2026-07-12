@@ -11,6 +11,8 @@
 #include <nvs.h>
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <cctype>
 #include <cstdio>
 #include <ctime>
@@ -63,6 +65,17 @@ constexpr int kMeetingTaskTickMs = 1000;
 // independent from the timed-state recompute (30 s) cadence above.
 constexpr int64_t kAutoPageIntervalMs = 20000;
 constexpr int kWifiConfigFallbackMs = 30000;
+
+bool JsonUInt64Strict(const cJSON* item, uint64_t* value) {
+    if (item == nullptr || value == nullptr || !cJSON_IsNumber(item)) return false;
+    const double number = item->valuedouble;
+    if (!std::isfinite(number) || number < 0 || std::floor(number) != number ||
+        static_cast<long double>(number) > static_cast<long double>(UINT64_MAX)) {
+        return false;
+    }
+    *value = static_cast<uint64_t>(number);
+    return true;
+}
 
 enum class BoardUiMode : uint8_t {
     StickyNote = 0,
@@ -972,10 +985,7 @@ private:
             return false;
         }
         const cJSON* version = cJSON_GetObjectItemCaseSensitive(root, "version");
-        const bool valid = cJSON_IsNumber(version) && version->valuedouble >= 0;
-        if (valid) {
-            remote_version = static_cast<uint64_t>(version->valuedouble);
-        }
+        const bool valid = JsonUInt64Strict(version, &remote_version);
         cJSON_Delete(root);
         return valid;
     }
@@ -1043,33 +1053,40 @@ private:
     }
 
     void StartNotesFetchTask() {
-        if (notes_fetch_task_ != nullptr) {
+        std::lock_guard<std::mutex> lock(notes_fetch_mutex_);
+        if (notes_fetch_in_progress_) {
             return;
         }
+        notes_fetch_in_progress_ = true;
         if (xTaskCreate(NotesFetchTaskEntry, "notes_fetch", 8192, this, 4,
-                        &notes_fetch_task_) != pdPASS) {
-            notes_fetch_task_ = nullptr;
+                        nullptr) != pdPASS) {
+            notes_fetch_in_progress_ = false;
             ESP_LOGE(kTag, "Failed to create notes fetch task");
         }
+    }
+
+    void FinishNotesFetchTask() {
+        std::lock_guard<std::mutex> lock(notes_fetch_mutex_);
+        notes_fetch_in_progress_ = false;
     }
 
     void NotesFetchTask() {
         uint64_t remote_version = 0;
         if (!FetchNotesVersionOnce(remote_version)) {
-            notes_fetch_task_ = nullptr;
+            FinishNotesFetchTask();
             return;
         }
         if (remote_version <= note_repository_.snapshot().version) {
             ESP_LOGD(kTag, "notes version unchanged: remote=%llu local=%llu",
                      static_cast<unsigned long long>(remote_version),
                      static_cast<unsigned long long>(note_repository_.snapshot().version));
-            notes_fetch_task_ = nullptr;
+            FinishNotesFetchTask();
             return;
         }
         if (!FetchNotesDataOnce()) {
             ESP_LOGW(kTag, "notes snapshot fetch failed");
         }
-        notes_fetch_task_ = nullptr;
+        FinishNotesFetchTask();
     }
 
     bool FetchNotesVersionOnce(uint64_t& remote_version) {
@@ -1095,8 +1112,7 @@ private:
         cJSON* root = cJSON_ParseWithLength(body.c_str(), body.size());
         if (root == nullptr) return false;
         const cJSON* version = cJSON_GetObjectItemCaseSensitive(root, "version");
-        const bool valid = cJSON_IsNumber(version) && version->valuedouble >= 0;
-        if (valid) remote_version = static_cast<uint64_t>(version->valuedouble);
+        const bool valid = JsonUInt64Strict(version, &remote_version);
         cJSON_Delete(root);
         return valid;
     }
@@ -1126,13 +1142,14 @@ private:
         if (root == nullptr) return false;
         const cJSON* version = cJSON_GetObjectItemCaseSensitive(root, "version");
         const cJSON* notes = cJSON_GetObjectItemCaseSensitive(root, "notes");
-        bool valid = cJSON_IsNumber(version) && version->valuedouble >= 0 && cJSON_IsArray(notes);
+        uint64_t remote_version = 0;
+        bool valid = JsonUInt64Strict(version, &remote_version) && cJSON_IsArray(notes);
         gotim::NoteSnapshot snapshot;
         if (valid) {
             const int raw_count = cJSON_GetArraySize(notes);
             const size_t count = raw_count < 0 ? 0 : static_cast<size_t>(raw_count);
             valid = raw_count >= 0 && !(count > gotim::kMaxNotes);
-            snapshot.version = static_cast<uint64_t>(version->valuedouble);
+            snapshot.version = remote_version;
             snapshot.count = static_cast<uint16_t>(count);
             for (int index = 0; valid && index < count; ++index) {
                 const cJSON* item = cJSON_GetArrayItem(notes, index);
@@ -1348,7 +1365,8 @@ private:
     uint64_t last_applied_meeting_version_ = 0;
     bool has_applied_meeting_version_ = false;
     TaskHandle_t meeting_fetch_task_ = nullptr;
-    TaskHandle_t notes_fetch_task_ = nullptr;
+    std::mutex notes_fetch_mutex_;
+    bool notes_fetch_in_progress_ = false;
     int64_t last_notes_refresh_ms_ = 0;
     gotim::NoteRepository note_repository_;
     TaskHandle_t timed_meeting_task_ = nullptr;

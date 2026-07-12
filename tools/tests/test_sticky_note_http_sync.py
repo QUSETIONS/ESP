@@ -28,6 +28,11 @@ def test_notes_fetches_snapshot_only_when_the_http_version_is_newer():
     )
     assert '"/notes/version"' in BOARD
     assert '"/notes"' in BOARD
+    assert "JsonUInt64Strict" in BOARD
+    assert "std::isfinite" in BOARD
+    assert "std::floor" in BOARD
+    assert "notes_fetch_mutex_" in BOARD
+    assert "notes_fetch_in_progress_" in BOARD
 
 
 def test_notes_snapshot_is_bounded_validated_and_replaced_before_any_display_handoff():
