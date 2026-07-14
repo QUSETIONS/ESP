@@ -24,4 +24,3 @@ def test_timed_task_keeps_manual_meeting_navigation_only():
     assert "MeetingAssistantNextPage()" not in timed_task
     assert "RequestUrgentRefresh()" not in timed_task
 
-
