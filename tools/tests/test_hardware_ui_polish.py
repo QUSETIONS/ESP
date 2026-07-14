@@ -123,16 +123,27 @@ def test_meeting_long_text_contract_is_bounded():
     assert "desktop_task_count && i < 2" in firmware
     assert "desktop_tasks[i].title.c_str()" in firmware
     assert "LV_LABEL_LONG_CLIP" in firmware
-    assert "constexpr lv_coord_t kQrCodeSize = 144;" in firmware
+    assert "constexpr lv_coord_t kQrCodeSize = 132;" in firmware
 
 
 
-def test_badge_id_leaves_space_before_task_heading():
+def test_badge_identity_uses_one_non_overlapping_metadata_row():
     firmware = (ROOT / "main" / "display" / "pages" / "meeting_assistant_page_adapter.cc").read_text(
         encoding="utf-8"
     )
     preview = (PREVIEW_DIR / "render_ui_preview.py").read_text(encoding="utf-8")
 
-    assert "attendee_id.c_str(), kPad, 74" in firmware
-    assert "user.get(\"id\", \"guest\"), 16), F10" in preview
-    assert "y + 74" in preview
+    assert "const std::string identity_meta" in firmware
+    assert "attendee_role.c_str(), kPad, 64" not in firmware
+    assert "attendee_id.c_str(), kPad, 74" not in firmware
+    assert "identity_meta = f" in preview
+    assert "y + 74" not in preview
+
+def test_summary_heading_rule_clears_chinese_title_line_height():
+    firmware = (ROOT / "main" / "display" / "pages" / "meeting_assistant_page_adapter.cc").read_text(encoding="utf-8")
+    preview = (PREVIEW_DIR / "render_ui_preview.py").read_text(encoding="utf-8")
+
+    assert "MakeFilledBlock(main, 0, 28, 54, 4, 0);" in firmware
+    assert "MakeWrappedLabel(main, bullets.c_str(), 0, 36" in firmware
+    assert "iy + 28" in preview
+    assert "y = iy + 36" in preview

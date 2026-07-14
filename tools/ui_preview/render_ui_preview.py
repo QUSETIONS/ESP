@@ -27,7 +27,7 @@ TEXT_SAFE_PAD = 16
 QR_QUIET_ZONE = 12
 QR_CARD_W = 176
 QR_CARD_H = 220
-QR_CODE_SIZE = 144
+QR_CODE_SIZE = 132
 
 # Keep the browser preview aligned with the firmware's sticky-note list/detail views.
 HOME_FOCUS_TOP = 74
@@ -206,11 +206,10 @@ def qr_panel(img: Image.Image, draw: ImageDraw.ImageDraw, xywh, title: str, subt
     """Open QR ticket with text safe padding and a scan-friendly quiet zone."""
     x, y, w, h = xywh
     filled_block(draw, (x + SP_4, y + SP_8, 24, 4))
-    thin_rule(draw, (x + SP_4, y + 52), w - SP_8)
 
     label_x = x + SP_12
-    text(draw, (label_x, y + SP_16), fit_text(title, 12), title_font, 0)
-    text(draw, (label_x, y + SP_16 + title_font.size + SP_4), fit_text(subtitle, 16), F10, 0)
+    text(draw, (label_x, y + 10), fit_text(title, 12), title_font, 0)
+    text(draw, (label_x, y + 34), fit_text(subtitle, 16), F10, 0)
 
     q_size = min(qr_size, w - 2 * QR_QUIET_ZONE, h - 64 - 2 * QR_QUIET_ZONE)
     q = qr(payload, q_size)
@@ -629,9 +628,9 @@ def summary_receipt_page(draw: ImageDraw.ImageDraw, summary: dict[str, Any]) -> 
     soft_card(draw, (mx, my, mw, mh))
     ix, iy = mx, my
     text(draw, (ix, iy), summary.get("title", "AI 摘要"), F14, 0)
-    filled_block(draw, (ix, iy + SP_20, 54, 4))
-    thin_rule(draw, (ix + 64, iy + SP_20 + 2), mw - 84, fill=0)
-    y = iy + SP_20 + SP_8
+    filled_block(draw, (ix, iy + 28, 54, 4))
+    thin_rule(draw, (ix + 64, iy + 30), mw - 84, fill=0)
+    y = iy + 36
     for line in summary.get("bullets", [])[:5]:
         wrapped = wrap_text(draw, line, F12, mw - 2 * SP_8, 1)
         for w in wrapped:
@@ -680,8 +679,8 @@ def identity_badge(draw: ImageDraw.ImageDraw, user: dict[str, Any], badge: dict[
     filled_block(draw, (x, y, w, 24))
     text(draw, (x + SP_8, y + 6), badge.get("label", "会后身份 Badge"), F10, 255)
     text(draw, (x + SP_12, y + 38), fit_text(user.get("name", "参会者"), 10), F18)
-    text(draw, (x + SP_12, y + 64), fit_text(user.get("role", "嘉宾"), 12), F12)
-    text(draw, (x + SP_12, y + 74), fit_text(user.get("id", "guest"), 16), F10)
+    identity_meta = f"{user.get('role', '嘉宾')} · {user.get('id', 'guest')}".strip(" ·")
+    text(draw, (x + SP_12, y + 66), fit_text(identity_meta, 24), F10)
 
 
 def task_list(draw: ImageDraw.ImageDraw, tasks: list[dict[str, Any]], xy) -> None:

@@ -26,7 +26,7 @@ constexpr lv_coord_t kScrollStep = 44;
 constexpr lv_coord_t kQrQuietZone = 12;
 constexpr lv_coord_t kQrCardWidth = 176;
 constexpr lv_coord_t kQrCardHeight = 220;
-constexpr lv_coord_t kQrCodeSize = 144;
+constexpr lv_coord_t kQrCodeSize = 132;
 constexpr size_t kPageCount = 4;
 
 const char* const kTitles[kPageCount] = {
@@ -145,16 +145,15 @@ void BuildQrTicket(lv_obj_t* parent, const char* title, const char* subtitle, co
     // Open QR ticket: no heavy outer box, keep the QR quiet zone intact.
     lv_obj_t* card = MakeSoftCard(parent, x, y, w, h, 0);
     MakeFilledBlock(card, 4, 8, 24, 4, 0);
-    MakeThinRule(card, 4, 52, w - 8);
 
     lv_obj_t* title_label = lv_label_create(card);
     SetFont(title_label, title_font);
     lv_label_set_text(title_label, title);
     lv_obj_set_width(title_label, w - 2 * kPad);
     lv_label_set_long_mode(title_label, LV_LABEL_LONG_CLIP);
-    lv_obj_align(title_label, LV_ALIGN_TOP_LEFT, kPad, 16);
+    lv_obj_align(title_label, LV_ALIGN_TOP_LEFT, kPad, 10);
 
-    MakeLabel(card, subtitle, kPad, 40, w - 2 * kPad,
+    MakeLabel(card, subtitle, kPad, 34, w - 2 * kPad,
               &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
 
     const lv_coord_t quiet_w = qr_size + 2 * kQrQuietZone;
@@ -384,8 +383,8 @@ void MeetingAssistantPageAdapter::BuildKeyPointsPage() {
     lv_obj_t* main = MakeSoftCard(content_, kMargin, 34, main_w, 140, kPad);
     MakeLabel(main, meeting_data_.summary_title.c_str(), 0, 0, main_w - 2 * kPad,
               &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
-    MakeFilledBlock(main, 0, 22, 54, 4, 0);
-    MakeThinRule(main, 64, 24, main_w - 2 * kPad - 84);
+    MakeFilledBlock(main, 0, 28, 54, 4, 0);
+    MakeThinRule(main, 64, 30, main_w - 2 * kPad - 84);
 
     std::string bullets;
     for (size_t i = 0; i < meeting_data_.summary_bullet_count && i < 5; ++i) {
@@ -394,7 +393,7 @@ void MeetingAssistantPageAdapter::BuildKeyPointsPage() {
             bullets += "\n";
         }
     }
-    MakeWrappedLabel(main, bullets.c_str(), 0, 30, main_w - 2 * kPad, 86, &BUILTIN_TEXT_FONT);
+    MakeWrappedLabel(main, bullets.c_str(), 0, 36, main_w - 2 * kPad, 86, &BUILTIN_TEXT_FONT);
 
     MakeMetricStrip(content_, kMargin, 184, main_w);
 }
@@ -411,9 +410,10 @@ void MeetingAssistantPageAdapter::MakeIdentityBadge(lv_obj_t* parent, lv_coord_t
     lv_obj_set_style_text_color(label, lv_color_white(), 0);
     MakeLabel(badge, meeting_data_.attendee_name.c_str(), kPad, 38, w - 2 * kPad,
               &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
-    MakeLabel(badge, meeting_data_.attendee_role.c_str(), kPad, 64, w - 2 * kPad,
-              &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
-    MakeLabel(badge, meeting_data_.attendee_id.c_str(), kPad, 74, w - 2 * kPad,
+    const std::string identity_meta = meeting_data_.attendee_role +
+        (meeting_data_.attendee_role.empty() || meeting_data_.attendee_id.empty() ? "" : " · ") +
+        meeting_data_.attendee_id;
+    MakeLabel(badge, identity_meta.c_str(), kPad, 66, w - 2 * kPad,
               &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
 }
 
