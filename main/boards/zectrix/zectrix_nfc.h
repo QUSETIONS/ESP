@@ -59,6 +59,7 @@ public:
     esp_err_t WriteNdef(const std::vector<uint8_t>& message);
     esp_err_t WriteTextNdef(const std::string& text, const std::string& language = "zh");
     esp_err_t WriteUriNdef(const std::string& uri);
+    esp_err_t WriteVerifiedUriNdef(const std::string& uri);
 
 private:
     static void FieldTaskEntry(void* arg);

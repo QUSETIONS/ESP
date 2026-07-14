@@ -36,21 +36,21 @@ def test_home_and_lab_drop_heavy_outer_boxes(tmp_path: Path):
 
     assert is_white(pages["01_home.png"], (38, 40))
     assert is_white(pages["01_home.png"], (386, 292))
-    assert is_white(pages["02_lab.png"], (38, 68))
-    assert is_white(pages["02_lab.png"], (386, 292))
+    assert is_white(pages["03_lab.png"], (38, 68))
+    assert is_white(pages["03_lab.png"], (386, 292))
 
 
 def test_meeting_pages_use_open_cards_instead_of_full_width_walls(tmp_path: Path):
     pages = render_previews(tmp_path)
 
-    assert is_white(pages["04_meeting_materials.png"], (16, 66))
-    assert is_white(pages["04_meeting_materials.png"], (208, 66))
-    assert is_white(pages["05_meeting_summary.png"], (380, 259))
-    assert is_white(pages["06_meeting_reminder.png"], (232, 66))
+    assert is_white(pages["05_meeting_materials.png"], (16, 66))
+    assert is_white(pages["05_meeting_materials.png"], (208, 66))
+    assert is_white(pages["06_meeting_summary.png"], (380, 259))
+    assert is_white(pages["07_meeting_reminder.png"], (232, 66))
 
 
 def test_summary_keeps_bottom_safe_area_clear(tmp_path: Path):
-    summary = render_previews(tmp_path)["05_meeting_summary.png"]
+    summary = render_previews(tmp_path)["06_meeting_summary.png"]
 
     bottom_safe_area = summary.crop((0, summary.height - 12, summary.width, summary.height))
     assert bottom_safe_area.getextrema() == (255, 255)
@@ -82,7 +82,7 @@ def test_firmware_exposes_polished_hardware_ui_helpers():
         ]
     )
 
-    assert "MakeNotePaperSurface" in sources
+    assert "StickyNoteHomePageAdapter::BuildDetail" in sources
     assert "MakeLabFeatureStage" in sources
     assert "BuildQrTicket" in sources
     assert "summary_receipt_page" in sources

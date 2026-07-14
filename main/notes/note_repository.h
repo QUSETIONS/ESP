@@ -14,6 +14,7 @@ class NoteRepository {
 public:
     NoteRepository();
 
+    esp_err_t Load();
     esp_err_t Load(NoteSnapshot* out);
     esp_err_t Save(const NoteSnapshot& snapshot);
     bool ReplaceIfNewer(const NoteSnapshot& candidate);
@@ -26,7 +27,7 @@ public:
 private:
     bool ValidateSnapshot(const NoteSnapshot& snapshot) const;
     bool ReadSnapshot(nvs_handle_t nvs, const char* key, NoteSnapshot* out) const;
-    NoteSnapshot snapshot_ = MakeStarterNoteSnapshot();
+    NoteSnapshot snapshot_{};
     bool loaded_ = false;
 };
 

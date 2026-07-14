@@ -1,8 +1,8 @@
 #ifndef STICKY_NOTE_HOME_PAGE_ADAPTER_H
 #define STICKY_NOTE_HOME_PAGE_ADAPTER_H
 
-#include "ui_page.h"
 #include "notes/note_data.h"
+#include "ui_page.h"
 
 #include <string>
 
@@ -10,8 +10,15 @@ class LcdDisplay;
 
 class StickyNoteHomePageAdapter : public IUiPage {
 public:
+    enum class ViewMode {
+        Home = 0,
+        Detail,
+    };
+
     enum class Action {
         None = 0,
+        OpenDetail,
+        ToggleComplete,
         OpenLab,
     };
 
@@ -26,6 +33,8 @@ public:
     void MoveUp();
     void MoveDown();
     Action Confirm();
+    bool CloseDetail();
+    bool IsDetailOpen() const;
     void SetNoteSnapshot(const gotim::NoteSnapshot& snapshot);
     size_t SelectedNoteIndex() const;
     bool HasNotes() const;
@@ -33,35 +42,53 @@ public:
     void SetDateLabel(const std::string& value);
 
 private:
-    void UpdateContent();
-    void UpdateNetworkHint();
-    void UpdateNoteContent();
     void BuildHome();
-    void MakeDeviceStatusPanel();
-    lv_obj_t* MakeHomeActionCard(int index, const char* title, const char* subtitle, lv_coord_t x, lv_coord_t y);
+    void BuildDetail();
+    void UpdateContent();
+    void UpdateNoteContent();
+    void UpdateHomeContent();
+    void UpdateDetailContent();
+    void UpdateNetworkHint();
+    void UpdateRootVisibility();
+    void UpdateDetailScrollMetrics();
 
     bool built_ = false;
-    int selected_index_ = 0;
+    ViewMode view_mode_ = ViewMode::Home;
     gotim::NoteSnapshot note_snapshot_ = {};
     size_t selected_note_index_ = 0;
     lv_coord_t note_scroll_offset_ = 0;
+    lv_coord_t note_body_content_height_ = 0;
+    lv_coord_t max_note_scroll_offset_ = 0;
     std::string date_label_ = "07/05 周日";
-    lv_obj_t* screen_ = nullptr;
-    lv_obj_t* time_label_ = nullptr;
     std::string network_title_ = "离线";
     std::string network_detail_ = "本地模式";
     std::string network_hint_ = "NFC Ready";
-    lv_obj_t* network_title_label_ = nullptr;
-    lv_obj_t* network_detail_label_ = nullptr;
-    lv_obj_t* network_hint_label_ = nullptr;
-    lv_obj_t* note_section_label_ = nullptr;
-    lv_obj_t* note_time_label_ = nullptr;
-    lv_obj_t* note_title_label_ = nullptr;
-    lv_obj_t* note_body_label_ = nullptr;
-    lv_obj_t* note_next_label_ = nullptr;
-    lv_obj_t* menu_rows_[2] = {};
-    lv_obj_t* menu_titles_[2] = {};
-    lv_obj_t* menu_subtitles_[2] = {};
+
+    lv_obj_t* screen_ = nullptr;
+    lv_obj_t* home_root_ = nullptr;
+    lv_obj_t* detail_root_ = nullptr;
+
+    lv_obj_t* time_label_ = nullptr;
+    lv_obj_t* home_count_label_ = nullptr;
+    lv_obj_t* home_status_label_ = nullptr;
+    lv_obj_t* focus_panel_ = nullptr;
+    lv_obj_t* focus_time_ = nullptr;
+    lv_obj_t* focus_title_ = nullptr;
+    lv_obj_t* focus_body_ = nullptr;
+    lv_obj_t* focus_chevron_ = nullptr;
+    lv_obj_t* queue_cells_[2] = {};
+    lv_obj_t* queue_times_[2] = {};
+    lv_obj_t* queue_titles_[2] = {};
+
+    lv_obj_t* detail_position_label_ = nullptr;
+    lv_obj_t* detail_state_box_ = nullptr;
+    lv_obj_t* detail_state_label_ = nullptr;
+    lv_obj_t* detail_reminder_label_ = nullptr;
+    lv_obj_t* detail_title_label_ = nullptr;
+    lv_obj_t* detail_body_viewport_ = nullptr;
+    lv_obj_t* detail_body_label_ = nullptr;
+    lv_obj_t* detail_scroll_track_ = nullptr;
+    lv_obj_t* detail_scroll_thumb_ = nullptr;
 };
 
 #endif  // STICKY_NOTE_HOME_PAGE_ADAPTER_H

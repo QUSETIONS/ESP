@@ -33,6 +33,7 @@ set(SOURCES
     "boards/zectrix-s3-epaper-4.2/charge_status.cc"
     "boards/zectrix-s3-epaper-4.2/custom_lcd_display.cc"
     "boards/zectrix-s3-epaper-4.2/i2c_power_hook.cc"
+    "boards/zectrix-s3-epaper-4.2/periodic_wake_controller.cc"
     "boards/zectrix-s3-epaper-4.2/rtc_pcf8563.cc"
     "boards/zectrix-s3-epaper-4.2/zectrix-s3-epaper-4.2.cc"
     "boards/zectrix-s3-epaper-4.2/FT/acoustic_selftest.cc"

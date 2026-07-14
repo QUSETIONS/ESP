@@ -74,5 +74,5 @@ void Application::StopSound() {
 }
 
 bool Application::CanEnterSleepMode() const {
-    return false;
+    return true;
 }

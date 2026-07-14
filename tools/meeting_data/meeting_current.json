@@ -54,7 +54,7 @@
   ],
   "materials": {
     "label": "PPT / PDF",
-    "url": "https://msh.cn/m"
+    "url": "https://raw.githubusercontent.com/QUSETIONS/ESP/master/tools/meeting_server/files/materials.txt"
   },
   "interaction": {
     "label": "提交问题",

@@ -52,7 +52,7 @@ bool RtcPcf8563::Init(gpio_num_t int_gpio) {
         }
     }
 
-    return ClearAlarmFlag();
+    return ClearAlarmFlag() && ClearTimerFlag();
 }
 
 bool RtcPcf8563::SetTime(const tm& local_tm) {

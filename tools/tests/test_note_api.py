@@ -35,7 +35,17 @@ def error_payload(error: urllib.error.HTTPError) -> dict:
 
 def sse_events(url: str) -> list[dict]:
     with urllib.request.urlopen(url, timeout=5) as response:
-        raw = response.read().decode("utf-8")
+        response.fp.raw._sock.settimeout(0.5)
+        lines = []
+        for _ in range(80):
+            try:
+                line = response.readline()
+            except TimeoutError:
+                break
+            if not line:
+                break
+            lines.append(line)
+        raw = b"".join(lines).decode("utf-8")
     events: list[dict] = []
     for block in raw.strip().split("\n\n"):
         if not block:

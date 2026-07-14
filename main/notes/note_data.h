@@ -40,6 +40,7 @@ bool SetNoteText(NoteData* note, const std::string& title, const std::string& bo
 uint32_t ComputeNoteCrc32(const uint8_t* data, size_t length);
 std::vector<uint8_t> SerializeNoteSnapshot(const NoteSnapshot& snapshot);
 bool DeserializeNoteSnapshot(const uint8_t* data, size_t length, NoteSnapshot* snapshot);
+void FillStarterNoteSnapshot(NoteSnapshot* snapshot);
 NoteSnapshot MakeStarterNoteSnapshot();
 
 }  // namespace gotim

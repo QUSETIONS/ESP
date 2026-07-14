@@ -185,12 +185,24 @@ void LcdDisplay::StickyNoteHomeMoveDown() {
     }
 }
 
-bool LcdDisplay::StickyNoteHomeConfirmOpenLab() {
+StickyNoteHomePageAdapter::Action LcdDisplay::StickyNoteHomeConfirm() {
     DisplayLockGuard lock(this);
     if (sticky_note_home_page_adapter_ == nullptr) {
-        return false;
+        return StickyNoteHomePageAdapter::Action::None;
     }
-    return sticky_note_home_page_adapter_->Confirm() == StickyNoteHomePageAdapter::Action::OpenLab;
+    return sticky_note_home_page_adapter_->Confirm();
+}
+
+bool LcdDisplay::StickyNoteHomeCloseDetail() {
+    DisplayLockGuard lock(this);
+    return sticky_note_home_page_adapter_ != nullptr &&
+           sticky_note_home_page_adapter_->CloseDetail();
+}
+
+bool LcdDisplay::StickyNoteHomeIsDetailOpen() const {
+    DisplayLockGuard lock(const_cast<LcdDisplay*>(this));
+    return sticky_note_home_page_adapter_ != nullptr &&
+           sticky_note_home_page_adapter_->IsDetailOpen();
 }
 
 void LcdDisplay::SetStickyNoteSnapshot(const gotim::NoteSnapshot& snapshot) {
@@ -201,11 +213,13 @@ void LcdDisplay::SetStickyNoteSnapshot(const gotim::NoteSnapshot& snapshot) {
 }
 
 size_t LcdDisplay::StickyNoteHomeSelectedNoteIndex() const {
+    DisplayLockGuard lock(const_cast<LcdDisplay*>(this));
     if (sticky_note_home_page_adapter_ == nullptr) return 0;
     return sticky_note_home_page_adapter_->SelectedNoteIndex();
 }
 
 bool LcdDisplay::StickyNoteHomeHasNotes() const {
+    DisplayLockGuard lock(const_cast<LcdDisplay*>(this));
     return sticky_note_home_page_adapter_ != nullptr && sticky_note_home_page_adapter_->HasNotes();
 }
 

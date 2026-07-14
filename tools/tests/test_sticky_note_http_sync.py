@@ -44,5 +44,5 @@ def test_notes_snapshot_is_bounded_validated_and_replaced_before_any_display_han
     assert "cJSON_IsString(title)" in fetch
     assert "cJSON_IsString(body)" in fetch
     assert "gotim::SetNoteText" in fetch
-    assert "note_repository_.ReplaceIfNewer(snapshot)" in fetch
+    assert "note_repository_.ReplaceIfNewer(*snapshot)" in fetch
     assert "display_->" not in fetch.split("void InitializeButtons()", 1)[0]

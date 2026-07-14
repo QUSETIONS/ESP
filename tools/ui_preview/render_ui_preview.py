@@ -29,6 +29,15 @@ QR_CARD_W = 176
 QR_CARD_H = 220
 QR_CODE_SIZE = 144
 
+# Keep the browser preview aligned with the firmware's sticky-note list/detail views.
+HOME_FOCUS_TOP = 74
+HOME_FOCUS_H = 118
+HOME_QUEUE_TOP = 202
+HOME_FOOTER_TOP = 250
+DETAIL_BODY_TOP = 116
+DETAIL_BODY_VIEWPORT_H = 124
+DETAIL_FOOTER_TOP = 248
+
 
 def load_data(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
@@ -71,7 +80,15 @@ def text(draw: ImageDraw.ImageDraw, xy, value: str, fnt=F12, fill=0) -> None:
 def wrap_text(draw: ImageDraw.ImageDraw, value: str, fnt, max_width: int, max_lines: int) -> list[str]:
     lines: list[str] = []
     current = ""
+    truncated = False
     for char in str(value):
+        if char == "\n":
+            lines.append(current or " ")
+            current = ""
+            if len(lines) >= max_lines:
+                truncated = True
+                break
+            continue
         candidate = current + char
         if draw.textlength(candidate, font=fnt) <= max_width or not current:
             current = candidate
@@ -79,10 +96,11 @@ def wrap_text(draw: ImageDraw.ImageDraw, value: str, fnt, max_width: int, max_li
         lines.append(current)
         current = char
         if len(lines) >= max_lines:
+            truncated = True
             break
     if current and len(lines) < max_lines:
         lines.append(current)
-    if len(lines) == max_lines and draw.textlength(lines[-1], font=fnt) > max_width:
+    if truncated and lines:
         while lines[-1] and draw.textlength(lines[-1] + "…", font=fnt) > max_width:
             lines[-1] = lines[-1][:-1]
         lines[-1] += "…"
@@ -94,9 +112,10 @@ def multiline(draw: ImageDraw.ImageDraw, xy, value: str, fnt=F12, fill=0, max_wi
     """Render wrapped text, return total height consumed."""
     x, y = xy
     line_h = fnt.size + line_gap
-    for idx, line in enumerate(wrap_text(draw, value, fnt, max_width, max_lines)):
+    lines = wrap_text(draw, value, fnt, max_width, max_lines)
+    for idx, line in enumerate(lines):
         text(draw, (x, y + idx * line_h), line, fnt, fill)
-    return len(wrap_text(draw, value, fnt, max_width, max_lines)) * line_h
+    return len(lines) * line_h
 
 
 def fit_text(value: str, limit: int) -> str:
@@ -222,6 +241,23 @@ def agenda_items(data: dict[str, Any]) -> list[dict[str, str]]:
     return list(data.get("agenda", []))
 
 
+def home_note_items(data: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return device-shaped notes while keeping agenda fixtures backward compatible."""
+    raw_notes = data.get("notes")
+    if isinstance(raw_notes, list):
+        return [item for item in raw_notes if isinstance(item, dict)]
+
+    notes: list[dict[str, Any]] = []
+    for item in agenda_items(data):
+        meta = " / ".join(part for part in (item.get("speaker", ""), item.get("note", "")) if part)
+        notes.append({
+            "title": item.get("title", ""),
+            "body": meta or "便利贴模式保留原功能",
+            "remind_at": item.get("time", ""),
+        })
+    return notes
+
+
 # ===========================================================================
 # Page 1 — Home / NOTE DESK
 # ===========================================================================
@@ -230,10 +266,18 @@ def render_home(data: dict[str, Any]) -> Image.Image:
     img, draw = canvas()
     home = data.get("home", {})
     status = data.get("device_status", {})
-    header(draw, "极趣便利贴", home.get("date_label", "07/05 周日"))
-    make_binding_rail(draw)
+    header(draw, "极趣实验室 / 便利贴", home.get("date_label", "07/05 周日"))
     home_sticky_surface(draw, data, status)
     return img
+
+
+def selected_note(data: dict[str, Any]) -> tuple[list[dict[str, Any]], int, dict[str, Any]]:
+    items = home_note_items(data)
+    selected = int(data.get("selected_note_index", data.get("current_agenda_index", 0)))
+    if not items:
+        return items, 0, {}
+    selected = max(0, min(selected, len(items) - 1))
+    return items, selected, items[selected]
 
 
 def make_binding_rail(draw: ImageDraw.ImageDraw) -> None:
@@ -254,33 +298,64 @@ def home_sticky_surface(draw: ImageDraw.ImageDraw, data: dict[str, Any], status:
 
 
 def current_note_stage(draw: ImageDraw.ImageDraw, data: dict[str, Any], status: dict[str, Any]) -> None:
-    """MakeNotePaperSurface parity: open note sheet, no heavy outer box."""
-    items = agenda_items(data)
-    current_idx = int(data.get("current_agenda_index", 0))
-    current = items[current_idx] if 0 <= current_idx < len(items) else (items[0] if items else {})
-    next_item = items[current_idx + 1] if current_idx + 1 < len(items) else {}
+    """Focus Desk: one active task, two quiet queue items, fixed command footer."""
+    items, selected, item = selected_note(data)
+    text(draw, (16, 45), "今日待办", F18)
+    count_label = f"{len(items)} 项"
+    text(draw, (384 - int(draw.textlength(count_label, font=F12)), 48), count_label, F12)
+    draw.rectangle((16, 68, 383, 69), fill=0)
 
-    x, y, w, h = 38, HEADER_H + SP_8, W - 50, H - HEADER_H - SP_16
-    thin_rule(draw, (x + SP_12, y + 82), w - SP_32)
-    thin_rule(draw, (x + SP_12, y + 126), w - SP_32)
-    filled_block(draw, (x + w - 62, y + SP_12, 38, 4))
+    filled_block(draw, (16, HOME_FOCUS_TOP, 368, HOME_FOCUS_H))
+    if item:
+        reminder = item.get("remind_at", "") or "现在"
+        title_value = item.get("title", "") or "无标题"
+        body_value = "已完成 · 确认查看详情" if item.get("completed", False) else (
+            item.get("body", "") or "无内容 · 确认查看详情"
+        )
+        text(draw, (30, 84), fit_text(f"NOW · {reminder}", 22), F12, 255)
+        text(draw, (30, 110), fit_text(title_value, 22), F20, 255)
+        text(draw, (30, 148), fit_text(body_value.replace("\n", " "), 40), F12, 255)
+        text(draw, (350, 116), "›", F22, 255)
+    else:
+        text(draw, (30, 84), "NOW · --:--", F12, 255)
+        text(draw, (30, 110), "暂无便签", F20, 255)
+        text(draw, (30, 148), "手机编辑后同步到设备", F12, 255)
 
-    ix = x + SP_16
-    text(draw, (ix, y + SP_12), "今日便签", F10)
-    filled_block(draw, (ix, y + 30, 62, 28))
-    text(draw, (ix + SP_8, y + 36), current.get("time", "--:--"), F12, 255)
-    multiline(draw, (ix + 76, y + 28), current.get("title", ""), F18, 0, w - 112, 2, 2)
-    meta = " / ".join(part for part in (current.get("speaker", ""), current.get("note", "")) if part)
-    text(draw, (ix, y + 64), fit_text(meta or "便利贴模式保留原功能", 28), F10)
+    for slot in range(2):
+        x = 16 + slot * 184
+        if slot == 1:
+            draw.line((199, HOME_QUEUE_TOP, 199, HOME_QUEUE_TOP + 39), fill=0)
+        if len(items) <= slot + 1:
+            continue
+        queued = items[(selected + slot + 1) % len(items)]
+        text(draw, (x + 10, HOME_QUEUE_TOP + 5),
+             fit_text(queued.get("remind_at", "") or "现在", 7), F10)
+        text(draw, (x + 64, HOME_QUEUE_TOP + 5),
+             fit_text(queued.get("title", "") or "无标题", 11), F12)
 
-    next_title = next_item.get("title", "暂无后续待办")
-    next_time = next_item.get("time", "--:--")
-    text(draw, (ix, y + 92), "下一项", F10)
-    text(draw, (ix + 60, y + 88), f"{next_time}  {fit_text(next_title, 18)}", F14)
+    draw.line((16, HOME_FOOTER_TOP, 383, HOME_FOOTER_TOP), fill=0)
+    text(draw, (16, 256), "上下选择 · 确认查看", F10)
+    lab_hint = "长按 · 实验室"
+    text(draw, (384 - int(draw.textlength(lab_hint, font=F10)), 256), lab_hint, F10)
+    status_text = " · ".join((
+        str(status.get("network", "离线")),
+        str(status.get("mode", "本地模式")),
+        str(status.get("nfc", "NFC READY")),
+    ))
+    text(draw, (16, 274), fit_text(status_text, 38), F10)
 
-    home_status_line(draw, (ix, y + 144, w - SP_32, 30), data.get("home", {}), status)
-    home_action_card(draw, (ix, y + 202, 136, 36), "便利贴", "今日待办", True)
-    home_action_card(draw, (ix + 150, y + 202, 136, 36), "实验室", "会议助手", False)
+def home_task_row(draw: ImageDraw.ImageDraw, xywh, reminder: str, title: str,
+                  body: str, selected: bool) -> None:
+    x, y, w, h = xywh
+    if selected:
+        filled_block(draw, xywh)
+        fill = 255
+    else:
+        draw.rectangle((x, y, x + w - 1, y + h - 1), outline=0, width=1)
+        fill = 0
+    text(draw, (x + 10, y + 8), fit_text(reminder, 8), F10, fill)
+    text(draw, (x + 74, y + 5), fit_text(title, 22), F14, fill)
+    text(draw, (x + 74, y + 25), fit_text(body.replace("\n", " "), 34), F10, fill)
 
 
 
@@ -304,7 +379,8 @@ def home_status_line(draw: ImageDraw.ImageDraw, xywh, home: dict[str, Any], stat
     x, y, w, h = xywh
     text(draw, (x, y), f"{home.get('month', 'JUL')} {home.get('day', '05')} {home.get('weekday', '周日')}", F14)
     text(draw, (x + 170, y + 1), fit_text(status.get("network", "离线"), 5), F12)
-    text(draw, (x + 226, y + 1), fit_text(status.get("nfc", "Ready"), 6), F12)
+    text(draw, (x + 218, y + 1), fit_text(status.get("mode", "本地"), 5), F12)
+    text(draw, (x + 266, y + 1), fit_text(status.get("nfc", "Ready"), 5), F12)
 
 
 def home_action_card(draw: ImageDraw.ImageDraw, xywh, title: str, subtitle: str, selected: bool) -> None:
@@ -318,7 +394,46 @@ def home_action_card(draw: ImageDraw.ImageDraw, xywh, title: str, subtitle: str,
         draw.rectangle((x, y, x + w - 1, y + h - 1), outline=0, width=1)
         fill = 0
     text(draw, (x + SP_12, y + 7), title, F12, fill)
-    text(draw, (x + SP_12, y + 23), subtitle, F10, fill)
+    subtitle_x = x + w - SP_12 - int(draw.textlength(subtitle, font=F10))
+    text(draw, (subtitle_x, y + 11), subtitle, F10, fill)
+
+
+def render_note_detail(data: dict[str, Any]) -> Image.Image:
+    img, draw = canvas()
+    items, selected, item = selected_note(data)
+    position = f"{selected + 1}/{len(items)}" if items else "0/0"
+    header(draw, "便签详情", position)
+    make_binding_rail(draw)
+
+    completed = bool(item.get("completed", False))
+    filled_block(draw, (52, 46, 72, 24))
+    state = "已完成" if completed else "待完成"
+    state_x = 52 + (72 - int(draw.textlength(state, font=F12))) // 2
+    text(draw, (state_x, 51), state, F12, 255)
+    reminder = item.get("remind_at", "") or "未设置"
+    text(draw, (138, 51), f"提醒  {fit_text(reminder, 12)}", F12)
+
+    multiline(draw, (52, 76), item.get("title", "") or "无标题", F18, 0, 330, 2, 2)
+    thin_rule(draw, (52, 110), 330)
+
+    body = item.get("body", "") or "无内容"
+    max_lines = max(1, DETAIL_BODY_VIEWPORT_H // (F12.size + SP_4))
+    body_lines = wrap_text(draw, body, F12, 306, 100)
+    for index, line in enumerate(body_lines[:max_lines]):
+        text(draw, (52, DETAIL_BODY_TOP + index * (F12.size + SP_4)), line, F12)
+
+    draw.rectangle((374, DETAIL_BODY_TOP, 379,
+                    DETAIL_BODY_TOP + DETAIL_BODY_VIEWPORT_H - 1), outline=0, width=1)
+    total_h = max(DETAIL_BODY_VIEWPORT_H, len(body_lines) * (F12.size + SP_4))
+    thumb_h = max(20, (DETAIL_BODY_VIEWPORT_H - 2) * DETAIL_BODY_VIEWPORT_H // total_h)
+    filled_block(draw, (375, DETAIL_BODY_TOP + 1, 4, thumb_h))
+
+    filled_block(draw, (52, DETAIL_FOOTER_TOP, 330, 40))
+    text(draw, (64, DETAIL_FOOTER_TOP + 11), "确认  切换完成", F12, 255)
+    back = "长按  返回列表"
+    back_x = 370 - int(draw.textlength(back, font=F12))
+    text(draw, (back_x, DETAIL_FOOTER_TOP + 11), back, F12, 255)
+    return img
 
 
 # ===========================================================================
@@ -606,11 +721,12 @@ def render_pages(data: dict[str, Any], out: Path) -> list[Path]:
     out.mkdir(parents=True, exist_ok=True)
     pages = {
         "01_home.png": render_home(data),
-        "02_lab.png": render_lab(data),
-        "03_meeting_agenda.png": render_agenda(data),
-        "04_meeting_materials.png": render_materials(data),
-        "05_meeting_summary.png": render_summary(data),
-        "06_meeting_reminder.png": render_reminder(data),
+        "02_note_detail.png": render_note_detail(data),
+        "03_lab.png": render_lab(data),
+        "04_meeting_agenda.png": render_agenda(data),
+        "05_meeting_materials.png": render_materials(data),
+        "06_meeting_summary.png": render_summary(data),
+        "07_meeting_reminder.png": render_reminder(data),
     }
     paths: list[Path] = []
     for name, img in pages.items():

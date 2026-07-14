@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <memory>
 #include <vector>
 
 namespace gotim {
@@ -13,7 +14,9 @@ constexpr char kStagingKey[] = "staging";
 constexpr char kActiveKey[] = "active";
 }
 
-NoteRepository::NoteRepository() = default;
+NoteRepository::NoteRepository() {
+    FillStarterNoteSnapshot(&snapshot_);
+}
 
 bool NoteRepository::ValidateSnapshot(const NoteSnapshot& snapshot) const {
     if (snapshot.schema_version != kNoteSchemaVersion || snapshot.count > kMaxNotes) return false;
@@ -40,25 +43,28 @@ bool NoteRepository::ReadSnapshot(nvs_handle_t nvs, const char* key, NoteSnapsho
     return DeserializeNoteSnapshot(bytes.data(), size, out) && ValidateSnapshot(*out);
 }
 
-esp_err_t NoteRepository::Load(NoteSnapshot* out) {
-    if (out == nullptr) return ESP_ERR_INVALID_ARG;
+esp_err_t NoteRepository::Load() {
     nvs_handle_t nvs = 0;
     esp_err_t err = nvs_open(kNamespace, NVS_READWRITE, &nvs);
     if (err != ESP_OK) {
-        snapshot_ = MakeStarterNoteSnapshot();
-        *out = snapshot_;
+        FillStarterNoteSnapshot(&snapshot_);
         loaded_ = true;
         return err;
     }
-    NoteSnapshot loaded;
-    if (!ReadSnapshot(nvs, kActiveKey, &loaded) && !ReadSnapshot(nvs, kStagingKey, &loaded)) {
-        loaded = MakeStarterNoteSnapshot();
+    if (!ReadSnapshot(nvs, kActiveKey, &snapshot_) &&
+        !ReadSnapshot(nvs, kStagingKey, &snapshot_)) {
+        FillStarterNoteSnapshot(&snapshot_);
     }
     nvs_close(nvs);
-    snapshot_ = loaded;
-    *out = snapshot_;
     loaded_ = true;
     return ESP_OK;
+}
+
+esp_err_t NoteRepository::Load(NoteSnapshot* out) {
+    if (out == nullptr) return ESP_ERR_INVALID_ARG;
+    const esp_err_t err = Load();
+    *out = snapshot_;
+    return err;
 }
 
 esp_err_t NoteRepository::Save(const NoteSnapshot& snapshot) {
@@ -69,8 +75,8 @@ esp_err_t NoteRepository::Save(const NoteSnapshot& snapshot) {
     if (err != ESP_OK) return err;
     err = nvs_set_blob(nvs, kStagingKey, bytes.data(), bytes.size());
     if (err == ESP_OK) err = nvs_commit(nvs);
-    NoteSnapshot verified;
-    if (err == ESP_OK && (!ReadSnapshot(nvs, kStagingKey, &verified) || verified.version != snapshot.version)) {
+    auto verified = std::make_unique<NoteSnapshot>();
+    if (err == ESP_OK && (!ReadSnapshot(nvs, kStagingKey, verified.get()) || verified->version != snapshot.version)) {
         err = ESP_ERR_INVALID_CRC;
     }
     if (err == ESP_OK) err = nvs_set_blob(nvs, kActiveKey, bytes.data(), bytes.size());
@@ -85,38 +91,38 @@ esp_err_t NoteRepository::Save(const NoteSnapshot& snapshot) {
 
 bool NoteRepository::ReplaceIfNewer(const NoteSnapshot& candidate) {
     if (!ValidateSnapshot(candidate) || candidate.version <= snapshot_.version) return false;
-    NoteSnapshot normalized = candidate;
-    const size_t shared_count = std::min<size_t>(snapshot_.count, normalized.count);
+    auto normalized = std::make_unique<NoteSnapshot>(candidate);
+    const size_t shared_count = std::min<size_t>(snapshot_.count, normalized->count);
     for (size_t index = 0; index < shared_count; ++index) {
         const NoteData& previous = snapshot_.notes[index];
-        NoteData& incoming = normalized.notes[index];
+        NoteData& incoming = normalized->notes[index];
         const bool reminder_changed = previous.reminder_unix_seconds != incoming.reminder_unix_seconds ||
             previous.reminder_length != incoming.reminder_length ||
             std::memcmp(previous.reminder.data(), incoming.reminder.data(), kMaxReminderBytes) != 0;
         if (reminder_changed) incoming.delivered = false;
     }
-    return Save(normalized) == ESP_OK;
+    return Save(*normalized) == ESP_OK;
 }
 
 bool NoteRepository::ToggleComplete(size_t index) {
     if (index >= snapshot_.count || snapshot_.version == UINT64_MAX) return false;
-    NoteSnapshot candidate = snapshot_;
-    NoteData& note = candidate.notes[index];
+    auto candidate = std::make_unique<NoteSnapshot>(snapshot_);
+    NoteData& note = candidate->notes[index];
     note.completed = !note.completed;
     note.delivered = false;
-    ++candidate.version;
-    return Save(candidate) == ESP_OK;
+    ++candidate->version;
+    return Save(*candidate) == ESP_OK;
 }
 
 bool NoteRepository::MarkDelivered(size_t index, uint64_t now_unix_seconds) {
     if (index >= snapshot_.count || snapshot_.version == UINT64_MAX) return false;
-    NoteSnapshot candidate = snapshot_;
-    NoteData& note = candidate.notes[index];
+    auto candidate = std::make_unique<NoteSnapshot>(snapshot_);
+    NoteData& note = candidate->notes[index];
     if (note.reminder_unix_seconds == 0 || note.reminder_unix_seconds > now_unix_seconds ||
         note.delivered || note.completed) return false;
     note.delivered = true;
-    ++candidate.version;
-    return Save(candidate) == ESP_OK;
+    ++candidate->version;
+    return Save(*candidate) == ESP_OK;
 }
 
 bool NoteRepository::NextReminder(uint64_t now_unix_seconds, size_t* index,

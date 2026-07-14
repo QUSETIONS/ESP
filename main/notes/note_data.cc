@@ -157,12 +157,19 @@ bool DeserializeNoteSnapshot(const uint8_t* data, size_t length, NoteSnapshot* s
     return offset == payload_length;
 }
 
+void FillStarterNoteSnapshot(NoteSnapshot* snapshot) {
+    if (snapshot == nullptr) return;
+    *snapshot = {};
+    snapshot->version = kNoteDataVersion;
+    snapshot->count = 1;
+    SetNoteText(&snapshot->notes[0], "欢迎使用便利贴",
+                "用手机编辑，设备离线时保留最后内容");
+    snapshot->notes[0].order = 0;
+}
+
 NoteSnapshot MakeStarterNoteSnapshot() {
     NoteSnapshot snapshot;
-    snapshot.version = kNoteDataVersion;
-    snapshot.count = 1;
-    SetNoteText(&snapshot.notes[0], "欢迎使用便利贴", "用手机编辑，设备离线时保留最后内容");
-    snapshot.notes[0].order = 0;
+    FillStarterNoteSnapshot(&snapshot);
     return snapshot;
 }
 

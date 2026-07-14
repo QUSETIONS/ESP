@@ -45,7 +45,8 @@ class CustomLcdDisplay : public LcdDisplay {
 public:
     CustomLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel,
                   int width, int height, int offset_x, int offset_y,
-                  bool mirror_x, bool mirror_y, bool swap_xy,custom_lcd_spi_t _lcd_spi_data);
+                  bool mirror_x, bool mirror_y, bool swap_xy, custom_lcd_spi_t _lcd_spi_data,
+                  bool preserve_panel_contents = false);
     ~CustomLcdDisplay();
 
     void WriteRaw1bpp(int x, int y, int w, int h, const uint8_t* data, size_t len) override;
@@ -69,6 +70,9 @@ public:
 
     // Refresh state for sleep gating
     bool IsRefreshPending();
+    void SuspendRefresh();
+    void ResumeRefresh(bool force_full, bool discard_pending);
+    bool PrepareForDeepSleep();
 
     // Notify when refresh transitions from busy to idle.
     void SetOnRefreshIdle(std::function<void()> cb);
@@ -150,6 +154,7 @@ private:
 
     bool prev_buffer_synced = false;  // 标志：prev_buffer 是否已与屏幕同步
     bool refresh_in_progress = false;
+    bool refresh_suspended_ = false;
     bool refresh_busy_seen_ = false;
     uint32_t next_kick_ms_ = 0;
     std::function<void()> on_refresh_idle_;

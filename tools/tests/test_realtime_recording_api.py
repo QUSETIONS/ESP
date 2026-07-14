@@ -84,6 +84,16 @@ def test_transcript_correction_and_sse_event(live_server):
     assert corrected["segment"]["speaker"] == "客户"
 
     with urllib.request.urlopen(live_server + "/api/events", timeout=5) as response:
-        text = response.read().decode()
+        response.fp.raw._sock.settimeout(0.5)
+        lines = []
+        for _ in range(40):
+            try:
+                line = response.readline()
+            except TimeoutError:
+                break
+            if not line:
+                break
+            lines.append(line)
+        text = b"".join(lines).decode()
     assert "event: transcript" in text or "event: summary" in text
     assert "id:" in text

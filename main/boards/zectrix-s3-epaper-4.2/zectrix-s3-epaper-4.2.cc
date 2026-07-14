@@ -4,6 +4,8 @@
 #include <esp_adc/adc_cali_scheme.h>
 #include <esp_adc/adc_oneshot.h>
 #include <esp_log.h>
+#include <esp_attr.h>
+#include <esp_sleep.h>
 #include <esp_sntp.h>
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
@@ -40,6 +42,7 @@
 #include "meeting/meeting_config.h"
 #include "meeting/meeting_data.h"
 #include "notes/note_repository.h"
+#include "periodic_wake_controller.h"
 #include "rtc_pcf8563.h"
 #include "sdkconfig.h"
 #include "ssid_manager.h"
@@ -65,6 +68,8 @@ constexpr int kMeetingTaskTickMs = 1000;
 // independent from the timed-state recompute (30 s) cadence above.
 constexpr int64_t kAutoPageIntervalMs = 20000;
 constexpr int kWifiConfigFallbackMs = 30000;
+constexpr int kNfcWriteAttempts = 3;
+constexpr int kNfcRetryDelayMs = 120;
 
 bool JsonUInt64Strict(const cJSON* item, uint64_t* value) {
     if (item == nullptr || value == nullptr || !cJSON_IsNumber(item)) return false;
@@ -91,20 +96,69 @@ struct ProvisioningPayload {
     std::string meeting_url;
 };
 
+constexpr uint32_t kRetainedStateMagic = 0x4754494D;  // "GTIM"
+RTC_DATA_ATTR uint32_t g_retained_state_magic;
+RTC_DATA_ATTR VisibleStateKey g_retained_visible_state;
+RTC_DATA_ATTR uint8_t g_retained_ui_mode;
+RTC_DATA_ATTR uint32_t g_rtc_wake_count;
+
+VisibleStateKey LoadRetainedVisibleState() {
+    if (g_retained_state_magic != kRetainedStateMagic) {
+        return {};
+    }
+    return g_retained_visible_state;
+}
+
+uint64_t Ext1MaskFor(gpio_num_t gpio) {
+    return 1ULL << static_cast<uint32_t>(gpio);
+}
+
+bool IsRtcCountdownWake() {
+    if (esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_EXT1) {
+        return false;
+    }
+    const uint64_t status = esp_sleep_get_ext1_wakeup_status();
+    const uint64_t button_mask = Ext1MaskFor(TODO_CONFIRM_BUTTON_GPIO) |
+                                 Ext1MaskFor(TODO_DOWN_BUTTON_GPIO);
+    return (status & Ext1MaskFor(RTC_INT_GPIO)) != 0 &&
+           (status & button_mask) == 0;
+}
+
 class CustomBoard : public Board {
 public:
     CustomBoard()
         : up_button_(TODO_UP_BUTTON_GPIO, false, kNavLongPressMs),
           down_button_(TODO_DOWN_BUTTON_GPIO, false, kNavLongPressMs),
           confirm_button_(BOOT_BUTTON_GPIO, false, kNavLongPressMs) {
+        rtc_wake_ = IsRtcCountdownWake() &&
+                    g_retained_state_magic == kRetainedStateMagic;
+        periodic_wake_controller_ = std::make_unique<PeriodicWakeController>(
+            rtc_wake_, GetNowMs(), LoadRetainedVisibleState());
+        if (g_retained_state_magic != kRetainedStateMagic) {
+            g_rtc_wake_count = 0;
+        }
+        if (rtc_wake_) {
+            ++g_rtc_wake_count;
+        }
+        ESP_LOGI(kTag, "RTC wake cycle=%u", static_cast<unsigned>(g_rtc_wake_count));
+        ESP_LOGI(kTag, "Boot wake_cause=%d ext1=0x%llx rtc_wake=%u",
+                 static_cast<int>(esp_sleep_get_wakeup_cause()),
+                 static_cast<unsigned long long>(esp_sleep_get_ext1_wakeup_status()),
+                 rtc_wake_ ? 1U : 0U);
         InitializePower();
         InitializeI2c();
         InitializeRtc();
-        InitializeNfc();
+        if (!rtc_wake_) {
+            InitializeNfc();
+        }
         InitializeChargeStatus();
+        InitializeNoteRepository();
         InitializeLcdDisplay();
         InitializeButtons();
-        InitializeBle();
+        if (!rtc_wake_) {
+            InitializeBle();
+        }
+        StartPeriodicWakeTask();
     }
 
     std::string GetBoardType() override {
@@ -160,7 +214,11 @@ public:
         } else {
             ESP_LOGI(kTag, "Starting Wi-Fi station");
             wifi.StartStation();
-            StartWifiConfigFallbackTask();
+            if (charge_status_.Get().power_present) {
+                StartWifiConfigFallbackTask();
+            } else {
+                ESP_LOGI(kTag, "Battery mode skips Wi-Fi config fallback");
+            }
         }
     }
 
@@ -174,6 +232,11 @@ public:
 
     void EnterNormalMode() override {
         if (display_ == nullptr) {
+            return;
+        }
+        if (rtc_wake_ && !initial_page_restored_) {
+            initial_page_restored_ = true;
+            RestoreRetainedPage();
             return;
         }
         ui_mode_ = BoardUiMode::StickyNote;
@@ -253,6 +316,49 @@ private:
         return esp_timer_get_time() / 1000;
     }
 
+    void RestoreRetainedPage() {
+        const uint8_t retained_mode =
+            g_retained_state_magic == kRetainedStateMagic
+                ? g_retained_ui_mode
+                : static_cast<uint8_t>(BoardUiMode::StickyNote);
+        if (retained_mode == static_cast<uint8_t>(BoardUiMode::MeetingAssistant)) {
+            ui_mode_ = BoardUiMode::MeetingAssistant;
+            display_->ShowMeetingAssistantPage();
+        } else if (retained_mode == static_cast<uint8_t>(BoardUiMode::LabFeatures)) {
+            ui_mode_ = BoardUiMode::LabFeatures;
+            display_->ShowLabFeaturesPage();
+        } else {
+            ui_mode_ = BoardUiMode::StickyNote;
+            display_->ShowStickyNoteHomePage();
+        }
+        ESP_LOGI(kTag, "RTC wake restored UI mode=%u", retained_mode);
+    }
+
+    void RecordUserActivity(const char* reason) {
+        if (periodic_wake_controller_ != nullptr) {
+            periodic_wake_controller_->RecordUserActivity(GetNowMs());
+        }
+        if (!rtc_wake_) {
+            return;
+        }
+
+        ESP_LOGI(kTag, "RTC wake promoted to interactive mode: %s",
+                 reason != nullptr ? reason : "user");
+        rtc_wake_ = false;
+        rtc_check_complete_ = true;
+        rtc_display_refresh_requested_ = false;
+        rtc_display_wait_started_ms_ = 0;
+        if (display_ != nullptr) {
+            display_->ResumeRefresh(true, false);
+        }
+        if (nfc_ == nullptr) {
+            InitializeNfc();
+        }
+        if (ble_server_ == nullptr) {
+            InitializeBle();
+        }
+    }
+
     void InitializePower() {
         power_ = std::make_unique<BoardPowerBsp>(EPD_PWR_PIN,
                                                  Audio_PWR_PIN,
@@ -261,7 +367,11 @@ private:
                                                  &charge_status_);
         power_->VbatPowerOn();
         power_->PowerAudioOn();
-        power_->PowerEpdOn();
+        if (rtc_wake_) {
+            power_->PowerEpdOff();
+        } else {
+            power_->PowerEpdOn();
+        }
         while (!gpio_get_level(VBAT_PWR_GPIO)) {
             vTaskDelay(pdMS_TO_TICKS(10));
         }
@@ -289,6 +399,9 @@ private:
             ESP_LOGW(kTag, "RTC init failed");
             return;
         }
+        if (rtc_wake_) {
+            rtc_->ClearTimerFlag();
+        }
         TryLoadSystemTimeFromRtc();
     }
 
@@ -301,11 +414,43 @@ private:
         if (!nfc_->Init()) {
             ESP_LOGW(kTag, "NFC init failed");
             nfc_.reset();
+            return;
         }
+        SyncNfcMaterialUrl(MakeDefaultMeetingData().materials_url);
     }
+
+    void SyncNfcMaterialUrl(const std::string& url) {
+        if (nfc_ == nullptr || url.empty() || url == last_nfc_material_url_) {
+            return;
+        }
+        esp_err_t last_error = ESP_FAIL;
+        for (int attempt = 1; attempt <= kNfcWriteAttempts; ++attempt) {
+            last_error = nfc_->WriteVerifiedUriNdef(url);
+            if (last_error == ESP_OK) {
+                last_nfc_material_url_ = url;
+                ESP_LOGI(kTag, "NFC material URI verified: %s", url.c_str());
+                return;
+            }
+            ESP_LOGW(kTag, "NFC material URI write attempt=%d/%d failed: %s",
+                     attempt, kNfcWriteAttempts, esp_err_to_name(last_error));
+            if (attempt < kNfcWriteAttempts) {
+                vTaskDelay(pdMS_TO_TICKS(kNfcRetryDelayMs));
+            }
+        }
+        ESP_LOGE(kTag, "NFC material URI unavailable after retries: %s",
+                 esp_err_to_name(last_error));
+    }
+
 
     void InitializeChargeStatus() {
         charge_status_.Init(CHARGE_DETECT_GPIO, CHARGE_FULL_GPIO, GetNowMs());
+    }
+
+    void InitializeNoteRepository() {
+        const esp_err_t err = note_repository_.Load();
+        if (err != ESP_OK) {
+            ESP_LOGW(kTag, "Note repository load fallback: %s", esp_err_to_name(err));
+        }
     }
 
     void InitializeLcdDisplay() {
@@ -328,13 +473,18 @@ private:
                                         DISPLAY_MIRROR_X,
                                         DISPLAY_MIRROR_Y,
                                         DISPLAY_SWAP_XY,
-                                        lcd_spi_data);
+                                        lcd_spi_data,
+                                        rtc_wake_);
         {
             std::lock_guard<std::mutex> lock(meeting_data_mutex_);
             meeting_data_ = MakeDefaultMeetingData();
         }
-        gotim::NoteSnapshot note_snapshot;
-        note_repository_.Load(&note_snapshot);
+        meeting_payload_loaded_this_boot_ = !rtc_wake_;
+        const VisibleStateKey retained = periodic_wake_controller_->visible_state();
+        if (rtc_wake_ && retained.meeting_version > 0) {
+            last_applied_meeting_version_ = retained.meeting_version;
+            has_applied_meeting_version_ = true;
+        }
         display_->SetStickyNoteSnapshot(note_repository_.snapshot());
         ApplyTimedMeetingState(true);
         RefreshClockLabels();
@@ -345,6 +495,7 @@ private:
     // state and push it to the display. Empty json reverts to the default
     // payload (used by the control characteristic's revert command).
     void CommitMeetingJson(const std::string& json, BleMeetingServer::CommitResult& out) {
+        RecordUserActivity("ble_meeting");
         MeetingData data;
         if (json.empty()) {
             data = MakeDefaultMeetingData();
@@ -363,11 +514,13 @@ private:
         {
             std::lock_guard<std::mutex> lock(meeting_data_mutex_);
             meeting_data_ = data;
+            meeting_payload_loaded_this_boot_ = true;
         }
+        SyncNfcMaterialUrl(data.materials_url);
         if (display_ != nullptr) {
             display_->SetMeetingData(data);
             if (display_->IsMeetingAssistantPageActive()) {
-                display_->RequestUrgentRefresh();
+                    display_->RequestUrgentRefresh();
             }
         }
         out.ok = true;
@@ -506,6 +659,7 @@ private:
     }
 
     void ProvisionWifiFromBle(const std::string& json, BleMeetingServer::CommitResult& out) {
+        RecordUserActivity("ble_provision");
         ProvisioningPayload payload;
         std::string error;
         if (!ParseProvisioningJson(json, payload, error)) {
@@ -526,7 +680,7 @@ private:
         if (display_ != nullptr) {
             display_->SetStickyNoteNetworkHint("BLE配网", payload.ssid, "连接中");
             if (display_->IsStickyNoteHomePageActive()) {
-                display_->RequestUrgentRefresh();
+                    display_->RequestUrgentRefresh();
             }
         }
 
@@ -609,17 +763,21 @@ private:
                 wifi_connected_ = true;
                 StartSntpIfNeeded();
                 TrySyncRtcFromSystemTime();
-                ApplyTimedMeetingState(true);
+                ApplyTimedMeetingState(!rtc_wake_);
                 RefreshClockLabels();
                 if (display_ != nullptr) {
                     display_->SetStickyNoteNetworkHint("在线", wifi.GetSsid(), wifi.GetIpAddress());
-                    if (display_->IsStickyNoteHomePageActive()) {
-                        display_->RequestUrgentRefresh();
+                    if (!rtc_wake_ && display_->IsStickyNoteHomePageActive()) {
+                    display_->RequestUrgentRefresh();
                     }
                 }
                 NotifyNetworkEvent(NetworkEvent::Connected, wifi.GetSsid());
-                StartMeetingFetchTask();
-                StartNotesFetchTask();
+                if (rtc_wake_) {
+                    StartRtcWakeCheckTask();
+                } else {
+                    StartMeetingFetchTask();
+                    StartNotesFetchTask();
+                }
                 break;
             case WifiEvent::Disconnected:
                 ESP_LOGW(kTag, "Wi-Fi disconnected");
@@ -627,13 +785,14 @@ private:
                 NotifyNetworkEvent(NetworkEvent::Disconnected, "");
                 break;
             case WifiEvent::ConfigModeEnter:
+                RecordUserActivity("wifi_config");
                 ESP_LOGI(kTag, "Wi-Fi config AP: ssid=%s url=%s",
                          wifi.GetApSsid().c_str(),
                          wifi.GetApWebUrl().c_str());
                 if (display_ != nullptr) {
                     display_->SetStickyNoteNetworkHint("配网热点", wifi.GetApSsid(), "192.168.4.1");
                     if (display_->IsStickyNoteHomePageActive()) {
-                        display_->RequestUrgentRefresh();
+                    display_->RequestUrgentRefresh();
                     }
                 }
                 NotifyNetworkEvent(NetworkEvent::WifiConfigModeEnter, wifi.GetApWebUrl());
@@ -852,7 +1011,7 @@ private:
         if (should_push && display_ != nullptr) {
             display_->SetMeetingData(data_snapshot);
             if (display_->IsMeetingAssistantPageActive()) {
-                display_->RequestUrgentRefresh();
+                    display_->RequestUrgentRefresh();
             }
         }
     }
@@ -882,18 +1041,20 @@ private:
         for (;;) {
             ApplyTimedMeetingState(false);
             const int64_t now_ms = GetNowMs();
-            if (wifi_connected_ && now_ms - last_refresh_ms >= kMeetingVersionCheckIntervalMs) {
+            if (!rtc_wake_ && wifi_connected_ &&
+                now_ms - last_refresh_ms >= kMeetingVersionCheckIntervalMs) {
                 StartMeetingFetchTask();
                 last_refresh_ms = now_ms;
             }
-            if (wifi_connected_ && now_ms - last_notes_refresh_ms_ >= kNotesVersionCheckIntervalMs) {
+            if (!rtc_wake_ && wifi_connected_ &&
+                now_ms - last_notes_refresh_ms_ >= kNotesVersionCheckIntervalMs) {
                 StartNotesFetchTask();
                 last_notes_refresh_ms_ = now_ms;
             }
             // Auto-page the meeting assistant while it is the active page. The
             // e-paper refresh cost is only paid when the meeting page is shown;
             // the sticky-note home and lab pages are left untouched.
-            if (now_ms - last_auto_page_ms >= kAutoPageIntervalMs) {
+            if (!rtc_wake_ && now_ms - last_auto_page_ms >= kAutoPageIntervalMs) {
                 last_auto_page_ms = now_ms;
                 if (display_ != nullptr && display_->IsMeetingAssistantPageActive()) {
                     display_->MeetingAssistantNextPage();
@@ -901,6 +1062,283 @@ private:
                 }
             }
             vTaskDelay(pdMS_TO_TICKS(kMeetingTaskTickMs));
+        }
+    }
+
+    bool IsNotesFetchInProgress() {
+        std::lock_guard<std::mutex> lock(notes_fetch_mutex_);
+        return notes_fetch_in_progress_;
+    }
+
+    bool IsAnyFetchInProgress() {
+        return meeting_fetch_task_ != nullptr ||
+               IsNotesFetchInProgress() ||
+               rtc_wake_check_task_ != nullptr;
+    }
+
+    VisibleStateKey BuildVisibleStateKey() {
+        VisibleStateKey key = periodic_wake_controller_ != nullptr
+                                  ? periodic_wake_controller_->visible_state()
+                                  : VisibleStateKey{};
+        {
+            std::lock_guard<std::mutex> lock(meeting_data_mutex_);
+            key.meeting_version = has_applied_meeting_version_
+                                      ? last_applied_meeting_version_
+                                      : meeting_data_.version;
+            if (meeting_payload_loaded_this_boot_) {
+                key.reminder_key = meeting_data_.active_reminder_index;
+            }
+        }
+        key.note_version = note_repository_.snapshot().version;
+
+        tm local_tm = {};
+        if (GetBestLocalTime(local_tm)) {
+            key.minute_key =
+                (static_cast<int64_t>(local_tm.tm_year + 1900) * 366 +
+                 local_tm.tm_yday) *
+                    1440 +
+                local_tm.tm_hour * 60 + local_tm.tm_min;
+        }
+        return key;
+    }
+
+    void FinishRtcWakeCheck() {
+        ApplyTimedMeetingState(false);
+        const VisibleStateKey current = BuildVisibleStateKey();
+        const VisibleStateKey retained = periodic_wake_controller_->visible_state();
+        const bool visible_changed =
+            periodic_wake_controller_->DidVisibleStateChange(current);
+        ESP_LOGI(kTag,
+                 "RTC visible decision: changed=%u retained=%llu/%llu/%lld/%d current=%llu/%llu/%lld/%d",
+                 visible_changed ? 1U : 0U,
+                 static_cast<unsigned long long>(retained.meeting_version),
+                 static_cast<unsigned long long>(retained.note_version),
+                 static_cast<long long>(retained.minute_key),
+                 static_cast<int>(retained.reminder_key),
+                 static_cast<unsigned long long>(current.meeting_version),
+                 static_cast<unsigned long long>(current.note_version),
+                 static_cast<long long>(current.minute_key),
+                 static_cast<int>(current.reminder_key));
+        periodic_wake_controller_->CommitVisibleState(current);
+
+        if (rtc_wake_ && display_ != nullptr) {
+            if (visible_changed) {
+                ESP_LOGI(kTag,
+                         "RTC check changed: meeting=%llu notes=%llu minute=%lld reminder=%d",
+                         static_cast<unsigned long long>(current.meeting_version),
+                         static_cast<unsigned long long>(current.note_version),
+                         static_cast<long long>(current.minute_key),
+                         static_cast<int>(current.reminder_key));
+                rtc_display_refresh_requested_ = true;
+                rtc_display_wait_started_ms_ = GetNowMs();
+                display_->ResumeRefresh(true, false);
+            } else {
+                ESP_LOGI(kTag, "RTC check unchanged: skip physical EPD refresh");
+                display_->ResumeRefresh(false, true);
+            }
+        }
+        rtc_check_complete_ = true;
+    }
+
+    static void RtcWakeCheckTaskEntry(void* arg) {
+        static_cast<CustomBoard*>(arg)->RtcWakeCheckTask();
+        vTaskDelete(nullptr);
+    }
+
+    void StartRtcWakeCheckTask() {
+        if (!rtc_wake_ || rtc_check_complete_ || rtc_wake_check_task_ != nullptr) {
+            return;
+        }
+        ESP_LOGI(kTag, "RTC version check budget=%lld ms",
+                 static_cast<long long>(
+                     PeriodicWakeController::kRtcNetworkBudgetMs));
+        rtc_check_started_ = true;
+        if (xTaskCreate(RtcWakeCheckTaskEntry,
+                        "rtc_version_check",
+                        8192,
+                        this,
+                        4,
+                        &rtc_wake_check_task_) != pdPASS) {
+            rtc_wake_check_task_ = nullptr;
+            rtc_check_started_ = false;
+            ESP_LOGE(kTag, "Failed to create RTC version check task");
+        }
+    }
+
+    void RtcWakeCheckTask() {
+        const VisibleStateKey retained = periodic_wake_controller_->visible_state();
+        uint64_t remote_meeting_version = 0;
+        if (FetchMeetingVersionOnce(remote_meeting_version) &&
+            remote_meeting_version > retained.meeting_version) {
+            if (!FetchMeetingDataOnce()) {
+                ESP_LOGW(kTag, "RTC meeting content fetch failed");
+            }
+        }
+
+        uint64_t remote_note_version = 0;
+        if (FetchNotesVersionOnce(remote_note_version) &&
+            remote_note_version > note_repository_.snapshot().version) {
+            if (!FetchNotesDataOnce()) {
+                ESP_LOGW(kTag, "RTC note content fetch failed");
+            } else if (display_ != nullptr) {
+                display_->SetStickyNoteSnapshot(note_repository_.snapshot());
+            }
+        }
+
+        FinishRtcWakeCheck();
+        rtc_wake_check_task_ = nullptr;
+    }
+
+    static void PeriodicWakeTaskEntry(void* arg) {
+        static_cast<CustomBoard*>(arg)->PeriodicWakeTask();
+    }
+
+    void StartPeriodicWakeTask() {
+        if (periodic_wake_task_ != nullptr) {
+            return;
+        }
+        if (xTaskCreate(PeriodicWakeTaskEntry,
+                        "periodic_wake",
+                        6144,
+                        this,
+                        4,
+                        &periodic_wake_task_) != pdPASS) {
+            periodic_wake_task_ = nullptr;
+            ESP_LOGE(kTag, "Failed to create periodic wake task");
+        }
+    }
+
+    bool TryEnterDeepSleep() {
+        if (rtc_ == nullptr || display_ == nullptr || power_ == nullptr) {
+            return false;
+        }
+        if (display_->IsRefreshPending()) {
+            return false;
+        }
+
+        const VisibleStateKey current = BuildVisibleStateKey();
+        periodic_wake_controller_->CommitVisibleState(current);
+
+        if (!rtc_->ClearTimerFlag() ||
+            !rtc_->StartCountdownTimer(PeriodicWakeController::kWakeIntervalSeconds)) {
+            ESP_LOGE(kTag, "Failed to arm PCF8563 countdown");
+            return false;
+        }
+
+        ESP_LOGI(kTag, "PCF8563 countdown armed: interval=%us",
+                 PeriodicWakeController::kWakeIntervalSeconds);
+        const uint64_t wake_mask =
+            Ext1MaskFor(RTC_INT_GPIO) |
+            Ext1MaskFor(TODO_CONFIRM_BUTTON_GPIO) |
+            Ext1MaskFor(TODO_DOWN_BUTTON_GPIO);
+        esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+        const esp_err_t wake_err =
+            esp_sleep_enable_ext1_wakeup(wake_mask, ESP_EXT1_WAKEUP_ANY_LOW);
+        if (wake_err != ESP_OK) {
+            ESP_LOGE(kTag, "Failed to enable EXT1 wake: %s",
+                     esp_err_to_name(wake_err));
+            rtc_->StopCountdownTimer();
+            return false;
+        }
+
+        WifiManager::GetInstance().StopStation();
+        if (!display_->PrepareForDeepSleep()) {
+            rtc_->StopCountdownTimer();
+            return false;
+        }
+
+        g_retained_visible_state = periodic_wake_controller_->visible_state();
+        g_retained_ui_mode = static_cast<uint8_t>(ui_mode_);
+        g_retained_state_magic = kRetainedStateMagic;
+
+        power_->PowerAmpOff();
+        power_->PowerAudioOff();
+        power_->PowerEpdOff();
+        gpio_deep_sleep_hold_en();
+
+        ESP_LOGI(kTag,
+                 "Deep sleep: wake in %us, mask=0x%llx meeting=%llu notes=%llu",
+                 PeriodicWakeController::kWakeIntervalSeconds,
+                 static_cast<unsigned long long>(wake_mask),
+                 static_cast<unsigned long long>(
+                     g_retained_visible_state.meeting_version),
+                 static_cast<unsigned long long>(
+                     g_retained_visible_state.note_version));
+        vTaskDelay(pdMS_TO_TICKS(20));
+        esp_deep_sleep_start();
+        return true;
+    }
+
+    void PeriodicWakeTask() {
+        for (;;) {
+            const int64_t now_ms = GetNowMs();
+            charge_status_.Tick(now_ms);
+            const bool external_power =
+                charge_status_.Get().power_present;
+            const bool has_credentials =
+                !SsidManager::GetInstance().GetSsidList().empty();
+            const bool provisioning =
+                WifiManager::GetInstance().IsInitialized() &&
+                WifiManager::GetInstance().IsConfigMode();
+
+            if (rtc_wake_ &&
+                (external_power || provisioning || !has_credentials)) {
+                RecordUserActivity(external_power ? "external_power" : "provisioning");
+            }
+
+            if (rtc_wake_ &&
+                periodic_wake_controller_->RtcBudgetExpired(now_ms) &&
+                !rtc_check_complete_ &&
+                rtc_wake_check_task_ == nullptr) {
+                ESP_LOGW(kTag, "RTC network budget expired; keep panel contents");
+                FinishRtcWakeCheck();
+            }
+
+            const bool display_busy =
+                display_ != nullptr && display_->IsRefreshPending();
+            if (rtc_wake_ && rtc_display_refresh_requested_ && display_busy &&
+                periodic_wake_controller_->DisplayWaitTimedOut(
+                    rtc_display_wait_started_ms_, now_ms)) {
+                ESP_LOGE(kTag,
+                         "EPD refresh exceeded %lld ms; postpone deep sleep",
+                         static_cast<long long>(
+                             PeriodicWakeController::kDisplayIdleTimeoutMs));
+                rtc_display_refresh_requested_ = false;
+                rtc_display_wait_started_ms_ = 0;
+                rtc_wake_ = false;
+                periodic_wake_controller_->RecordUserActivity(now_ms);
+            } else if (rtc_display_refresh_requested_ && !display_busy) {
+                rtc_display_refresh_requested_ = false;
+                rtc_display_wait_started_ms_ = 0;
+            }
+
+            PeriodicWakeInputs inputs;
+            inputs.external_power_present =
+                charge_status_.Get().power_present;
+            inputs.provisioning_active =
+                WifiManager::GetInstance().IsConfigMode();
+            inputs.has_wifi_credentials = has_credentials;
+            inputs.fetch_in_progress = IsAnyFetchInProgress();
+            inputs.display_busy =
+                display_ != nullptr && display_->IsRefreshPending();
+            inputs.rtc_check_complete = rtc_check_complete_;
+
+            const bool should_attempt_sleep =
+                periodic_wake_controller_->ShouldAttemptSleep(inputs, now_ms);
+            if (should_attempt_sleep) {
+                (void)TryEnterDeepSleep();
+            } else if (now_ms - last_sleep_block_log_ms_ >= 5000) {
+                last_sleep_block_log_ms_ = now_ms;
+                ESP_LOGI(kTag,
+                         "RTC sleep blocked: power=%u provisioning=%u credentials=%u fetch=%u display=%u check=%u",
+                         inputs.external_power_present ? 1U : 0U,
+                         inputs.provisioning_active ? 1U : 0U,
+                         inputs.has_wifi_credentials ? 1U : 0U,
+                         inputs.fetch_in_progress ? 1U : 0U,
+                         inputs.display_busy ? 1U : 0U,
+                         inputs.rtc_check_complete ? 1U : 0U);
+            }
+            vTaskDelay(pdMS_TO_TICKS(200));
         }
     }
 
@@ -970,7 +1408,7 @@ private:
             const size_t slash = url.rfind('/');
             url = (slash == std::string::npos ? url : url.substr(0, slash)) + "/meeting/version";
         }
-        http->SetTimeout(5000);
+        http->SetTimeout(rtc_wake_ ? 2000 : 5000);
         http->SetHeader("User-Agent", "ZecTrixMeeting/0.2");
         http->SetKeepAlive(false);
         if (!http->Open("GET", url)) {
@@ -1001,7 +1439,7 @@ private:
 
         const std::string url = GetMeetingAssistantUrl();
         ESP_LOGI(kTag, "Fetching meeting data: %s", url.c_str());
-        http->SetTimeout(10000);
+        http->SetTimeout(rtc_wake_ ? 3500 : 10000);
         http->SetHeader("User-Agent", "ZecTrixMeeting/0.1");
         http->SetKeepAlive(false);
 
@@ -1039,11 +1477,13 @@ private:
             meeting_data_ = data;
             last_applied_meeting_version_ = data.version;
             has_applied_meeting_version_ = true;
+            meeting_payload_loaded_this_boot_ = true;
         }
+        SyncNfcMaterialUrl(data.materials_url);
         if (display_ != nullptr) {
             display_->SetMeetingData(data);
             if (display_->IsMeetingAssistantPageActive()) {
-                display_->RequestUrgentRefresh();
+                    display_->RequestUrgentRefresh();
             }
         }
         return true;
@@ -1090,7 +1530,7 @@ private:
         } else if (display_ != nullptr) {
             display_->SetStickyNoteSnapshot(note_repository_.snapshot());
             if (display_->IsStickyNoteHomePageActive()) {
-                display_->RequestUrgentRefresh();
+                    display_->RequestUrgentRefresh();
             }
         }
         FinishNotesFetchTask();
@@ -1108,7 +1548,7 @@ private:
             const size_t slash = url.rfind('/');
             url = (slash == std::string::npos ? url : url.substr(0, slash)) + "/notes/version";
         }
-        http->SetTimeout(5000);
+        http->SetTimeout(rtc_wake_ ? 2000 : 5000);
         http->SetHeader("User-Agent", "ZecTrixNotes/0.1");
         http->SetKeepAlive(false);
         if (!http->Open("GET", url)) return false;
@@ -1136,7 +1576,7 @@ private:
             const size_t slash = url.rfind('/');
             url = (slash == std::string::npos ? url : url.substr(0, slash)) + "/notes";
         }
-        http->SetTimeout(10000);
+        http->SetTimeout(rtc_wake_ ? 3500 : 10000);
         http->SetHeader("User-Agent", "ZecTrixNotes/0.1");
         http->SetKeepAlive(false);
         if (!http->Open("GET", url)) return false;
@@ -1151,13 +1591,13 @@ private:
         const cJSON* notes = cJSON_GetObjectItemCaseSensitive(root, "notes");
         uint64_t remote_version = 0;
         bool valid = JsonUInt64Strict(version, &remote_version) && cJSON_IsArray(notes);
-        gotim::NoteSnapshot snapshot;
+        auto snapshot = std::make_unique<gotim::NoteSnapshot>();
         if (valid) {
             const int raw_count = cJSON_GetArraySize(notes);
             const size_t count = raw_count < 0 ? 0 : static_cast<size_t>(raw_count);
             valid = raw_count >= 0 && !(count > gotim::kMaxNotes);
-            snapshot.version = remote_version;
-            snapshot.count = static_cast<uint16_t>(count);
+            snapshot->version = remote_version;
+            snapshot->count = static_cast<uint16_t>(count);
             for (int index = 0; valid && index < count; ++index) {
                 const cJSON* item = cJSON_GetArrayItem(notes, index);
                 const cJSON* title = cJSON_GetObjectItemCaseSensitive(item, "title");
@@ -1169,7 +1609,7 @@ private:
                     break;
                 }
                 const std::string reminder_text = cJSON_IsString(reminder) ? reminder->valuestring : "";
-                gotim::NoteData& note = snapshot.notes[index];
+                gotim::NoteData& note = snapshot->notes[index];
                 if (!gotim::SetNoteText(&note, title->valuestring, body->valuestring,
                                         reminder_text)) {
                     valid = false;
@@ -1183,11 +1623,12 @@ private:
         }
         cJSON_Delete(root);
         if (!valid) return false;
-        return note_repository_.ReplaceIfNewer(snapshot);
+        return note_repository_.ReplaceIfNewer(*snapshot);
     }
 
     void InitializeButtons() {
         up_button_.OnPressDown([this]() {
+            RecordUserActivity("up");
             if (display_ == nullptr) {
                 return;
             }
@@ -1198,10 +1639,11 @@ private:
             } else {
                 display_->StickyNoteHomeMoveUp();
             }
-            display_->RequestUrgentRefresh();
+                    display_->RequestUrgentRefresh();
         });
 
         down_button_.OnPressDown([this]() {
+            RecordUserActivity("down");
             if (display_ == nullptr) {
                 return;
             }
@@ -1212,16 +1654,17 @@ private:
             } else {
                 display_->StickyNoteHomeMoveDown();
             }
-            display_->RequestUrgentRefresh();
+                    display_->RequestUrgentRefresh();
         });
 
         confirm_button_.OnClick([this]() {
+            RecordUserActivity("confirm");
             if (display_ == nullptr) {
                 return;
             }
             if (ui_mode_ == BoardUiMode::MeetingAssistant) {
                 display_->MeetingAssistantNextPage();
-                display_->RequestUrgentRefresh();
+                    display_->RequestUrgentRefresh();
                 return;
             }
             if (ui_mode_ == BoardUiMode::LabFeatures) {
@@ -1232,20 +1675,28 @@ private:
                 }
                 return;
             }
-            if (display_->StickyNoteHomeHasNotes()) {
+            const auto action = display_->StickyNoteHomeConfirm();
+            if (action == StickyNoteHomePageAdapter::Action::OpenLab) {
+                EnterLabFeaturesMode();
+                return;
+            }
+            if (action == StickyNoteHomePageAdapter::Action::OpenDetail) {
+                ESP_LOGI(kTag, "Sticky note detail opened index=%u",
+                         static_cast<unsigned>(display_->StickyNoteHomeSelectedNoteIndex()));
+                display_->RequestUrgentFullRefresh();
+                return;
+            }
+            if (action == StickyNoteHomePageAdapter::Action::ToggleComplete) {
                 const size_t index = display_->StickyNoteHomeSelectedNoteIndex();
                 if (note_repository_.ToggleComplete(index)) {
                     display_->SetStickyNoteSnapshot(note_repository_.snapshot());
                 }
-                display_->RequestUrgentRefresh();
-            } else if (display_->StickyNoteHomeConfirmOpenLab()) {
-                EnterLabFeaturesMode();
-            } else {
-                display_->RequestUrgentRefresh();
             }
+                    display_->RequestUrgentRefresh();
         });
 
         confirm_button_.OnLongPress([this]() {
+            RecordUserActivity("confirm_long");
             if (ui_mode_ == BoardUiMode::MeetingAssistant) {
                 EnterLabFeaturesMode();
                 return;
@@ -1255,6 +1706,11 @@ private:
                 return;
             }
             if (ui_mode_ == BoardUiMode::StickyNote) {
+                if (display_ != nullptr && display_->StickyNoteHomeCloseDetail()) {
+                    ESP_LOGI(kTag, "Sticky note detail closed");
+                    display_->RequestUrgentFullRefresh();
+                    return;
+                }
                 EnterLabFeaturesMode();
                 return;
             }
@@ -1293,7 +1749,7 @@ private:
 
             DisplayLockGuard lock(display_);
             page->UpdateSnapshot(snapshot);
-            display_->RequestUrgentRefresh();
+                    display_->RequestUrgentRefresh();
         });
 
         factory_test.SetShutdownCallback([this]() {
@@ -1371,7 +1827,9 @@ private:
     i2c_master_bus_handle_t i2c_bus_ = nullptr;
     std::unique_ptr<RtcPcf8563> rtc_;
     std::unique_ptr<ZectrixNfc> nfc_;
+    std::string last_nfc_material_url_;
     std::unique_ptr<BleMeetingServer> ble_server_;
+    std::unique_ptr<PeriodicWakeController> periodic_wake_controller_;
     ChargeStatus charge_status_;
     std::mutex meeting_data_mutex_;
     MeetingData meeting_data_;
@@ -1381,6 +1839,7 @@ private:
     bool sntp_started_ = false;
     uint64_t last_applied_meeting_version_ = 0;
     bool has_applied_meeting_version_ = false;
+    bool meeting_payload_loaded_this_boot_ = false;
     TaskHandle_t meeting_fetch_task_ = nullptr;
     std::mutex notes_fetch_mutex_;
     bool notes_fetch_in_progress_ = false;
@@ -1388,6 +1847,15 @@ private:
     gotim::NoteRepository note_repository_;
     TaskHandle_t timed_meeting_task_ = nullptr;
     TaskHandle_t wifi_fallback_task_ = nullptr;
+    TaskHandle_t rtc_wake_check_task_ = nullptr;
+    TaskHandle_t periodic_wake_task_ = nullptr;
+    bool rtc_wake_ = false;
+    bool initial_page_restored_ = false;
+    bool rtc_check_started_ = false;
+    bool rtc_check_complete_ = false;
+    bool rtc_display_refresh_requested_ = false;
+    int64_t rtc_display_wait_started_ms_ = 0;
+    int64_t last_sleep_block_log_ms_ = 0;
     BoardUiMode ui_mode_ = BoardUiMode::StickyNote;
     Button up_button_;
     Button down_button_;

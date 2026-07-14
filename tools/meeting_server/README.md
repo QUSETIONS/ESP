@@ -2,6 +2,8 @@
 
 Local JSON server for the meeting assistant data contract.
 
+录音后台已经支持 Base64 音频接收、顺序校验、持续 SSE、最终摘要和导出。默认是明确标注的离线 Demo ASR；真实音频 provider 的配置见 `tools/meeting_server/ASR_SETUP.md`，不要把厂商密钥放进浏览器。
+
 ```bash
 python3 tools/meeting_server/meeting_server.py --host 0.0.0.0 --port 8787
 ```
@@ -19,13 +21,18 @@ through the same JSON endpoints that the ink screen already reads.
 Endpoints:
 
 - `GET /health`
+- `GET /api/overview`（会议、ASR、便利贴、云端设备和群发状态）
+- `GET /api/integrations/zectrix`
 - `GET /` and `GET /editor`
 - `GET /meeting/current`
 - `POST /meeting/current`
 - `POST /meeting/agenda`
 - `POST /meeting/reminders`
 - `POST /meeting/transcript`
+- `POST /fleet/push`
 - `GET /files/<name>`
+
+ZecTrix 云端密钥只从服务端的 `ZECTRIX_API_KEY` 或 `ZECTRIX_API_KEY_FILE` 读取。创建和配置方式见 `tools/meeting_server/ZECTRIX_SETUP.md`。
 
 The default data file is:
 

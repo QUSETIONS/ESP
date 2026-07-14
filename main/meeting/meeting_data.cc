@@ -65,7 +65,7 @@ MeetingData MakeDefaultMeetingData() {
     data.agenda[4] = {"15:30", "集体合影", "", "签到墙"};
 
     data.materials_label = "PPT / PDF";
-    data.materials_url = "https://msh.cn/m";
+    data.materials_url = "https://raw.githubusercontent.com/QUSETIONS/ESP/master/tools/meeting_server/files/materials.txt";
     data.interaction_label = "提交问题";
     data.interaction_url = "https://msh.cn/q";
 

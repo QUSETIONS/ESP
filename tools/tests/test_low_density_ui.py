@@ -10,19 +10,19 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_home_uses_low_density_command_desk():
+def test_home_uses_focus_task_queue_and_separate_detail():
     firmware_ui = read("main/display/pages/sticky_note_home_page_adapter.cc")
     preview = read("tools/ui_preview/render_ui_preview.py")
 
-    assert "MakeHomeHeroCard" in firmware_ui
-    assert "MakeDeviceStatusPanel" in firmware_ui
-    assert "MakeHomeActionCard" in firmware_ui
-    assert "NOTE DESK" in firmware_ui
+    assert "kFocusPanelHeight = 118" in firmware_ui
+    assert "kQueueCellHeight = 40" in firmware_ui
+    assert "StickyNoteHomePageAdapter::BuildHome" in firmware_ui
+    assert "StickyNoteHomePageAdapter::BuildDetail" in firmware_ui
+    assert "detail_body_viewport_" in firmware_ui
 
-    assert "home_command_desk" in preview
-    assert "home_hero_card" in preview
-    assert "device_status_panel" in preview
-    assert "home_action_card" in preview
+    assert "Focus Desk" in preview
+    assert "render_note_detail" in preview
+    assert "DETAIL_BODY_VIEWPORT_H = 124" in preview
 
 
 def test_lab_and_meeting_remove_dense_console_language():
@@ -60,8 +60,8 @@ def test_frontend_uses_sticky_note_and_plugin_drawer_language():
 
     assert "home_binder_rail" in preview
     assert "home_sticky_surface" in preview
-    assert "MakeHomeBinderRail" in firmware_home
-    assert "MakeHomeStickySurface" in firmware_home
+    assert "MakeBindingRail" in firmware_home
+    assert "BuildDetail" in firmware_home
 
     assert "lab_plugin_drawer" in preview
     assert "MakeLabPluginDrawer" in firmware_lab
@@ -79,7 +79,7 @@ def test_home_and_lab_share_named_ui_system_primitives():
     preview = read("tools/ui_preview/render_ui_preview.py")
 
     assert "MakeBindingRail" in firmware_home
-    assert "MakeCurrentNoteStage" in firmware_home
+    assert "UpdateDetailContent" in firmware_home
     assert "MakeLabToolDrawer" in firmware_lab
     assert "make_binding_rail" in preview
     assert "current_note_stage" in preview
@@ -90,4 +90,4 @@ def test_firmware_home_rail_respects_bottom_safety_area():
     firmware_home = read("main/display/pages/sticky_note_home_page_adapter.cc")
 
     assert "kBottomSafeHeight = 12" in firmware_home
-    assert "kPageHeight - kBottomSafeHeight - y" in firmware_home
+    assert "kPageHeight - kBottomSafeHeight - rail_y" in firmware_home

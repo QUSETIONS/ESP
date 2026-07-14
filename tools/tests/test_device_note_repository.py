@@ -88,7 +88,7 @@ def test_repository_contract_covers_load_fallback_and_mutation_semantics():
     ):
         assert method in header
 
-    assert "MakeStarterNoteSnapshot" in source
+    assert "FillStarterNoteSnapshot" in source
     assert "ReadSnapshot(nvs, kActiveKey" in source
     assert "ReadSnapshot(nvs, kStagingKey" in source
     assert "candidate.version <= snapshot_.version" in source
@@ -98,6 +98,30 @@ def test_repository_contract_covers_load_fallback_and_mutation_semantics():
     assert "note.reminder_unix_seconds > now_unix_seconds" in source
     assert "earliest_reminder" in source
 
+
+
+def test_repository_startup_load_does_not_copy_snapshot_on_task_stack():
+    data_header = read(DATA_HEADER)
+    data_source = read(DATA_SOURCE)
+    repo_header = read(REPOSITORY_HEADER)
+    repo_source = read(REPOSITORY_SOURCE)
+
+    assert "void FillStarterNoteSnapshot(NoteSnapshot* snapshot)" in data_header
+    assert "void FillStarterNoteSnapshot(NoteSnapshot* snapshot)" in data_source
+    assert "esp_err_t Load();" in repo_header
+    load_body = repo_source.split("esp_err_t NoteRepository::Load()", 1)[1].split(
+        "esp_err_t NoteRepository::Load(NoteSnapshot* out)", 1
+    )[0]
+    assert "NoteSnapshot loaded" not in load_body
+    assert "FillStarterNoteSnapshot(&snapshot_)" in load_body
+
+
+def test_repository_runtime_mutations_do_not_allocate_snapshots_on_task_stack():
+    repo_source = read(REPOSITORY_SOURCE)
+    assert "std::make_unique<NoteSnapshot>" in repo_source
+    assert "NoteSnapshot verified;" not in repo_source
+    assert "NoteSnapshot normalized" not in repo_source
+    assert "NoteSnapshot candidate" not in repo_source
 
 def test_firmware_component_builds_note_sources():
     source = read(CMAKE)
