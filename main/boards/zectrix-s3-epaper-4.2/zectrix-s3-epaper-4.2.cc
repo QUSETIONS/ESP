@@ -62,11 +62,6 @@ constexpr int kMeetingTimedUpdateIntervalMs = 30000;
 constexpr int kMeetingVersionCheckIntervalMs = 5000;
 constexpr int kNotesVersionCheckIntervalMs = 5000;
 constexpr int kMeetingTaskTickMs = 1000;
-// Auto-paging of the meeting assistant: only ticks while the meeting page is
-// active, so the sticky-note home / lab pages keep their static e-paper. The
-// 20 s cadence lands mid-band of the requested 15-30 s window and is kept
-// independent from the timed-state recompute (30 s) cadence above.
-constexpr int64_t kAutoPageIntervalMs = 20000;
 constexpr int kWifiConfigFallbackMs = 30000;
 constexpr int kNfcWriteAttempts = 3;
 constexpr int kNfcRetryDelayMs = 120;
@@ -1037,7 +1032,6 @@ private:
 
     void TimedMeetingTask() {
         int64_t last_refresh_ms = GetNowMs();
-        int64_t last_auto_page_ms = GetNowMs();
         for (;;) {
             ApplyTimedMeetingState(false);
             const int64_t now_ms = GetNowMs();
@@ -1050,16 +1044,6 @@ private:
                 now_ms - last_notes_refresh_ms_ >= kNotesVersionCheckIntervalMs) {
                 StartNotesFetchTask();
                 last_notes_refresh_ms_ = now_ms;
-            }
-            // Auto-page the meeting assistant while it is the active page. The
-            // e-paper refresh cost is only paid when the meeting page is shown;
-            // the sticky-note home and lab pages are left untouched.
-            if (!rtc_wake_ && now_ms - last_auto_page_ms >= kAutoPageIntervalMs) {
-                last_auto_page_ms = now_ms;
-                if (display_ != nullptr && display_->IsMeetingAssistantPageActive()) {
-                    display_->MeetingAssistantNextPage();
-                    display_->RequestUrgentRefresh();
-                }
             }
             vTaskDelay(pdMS_TO_TICKS(kMeetingTaskTickMs));
         }
@@ -1219,16 +1203,13 @@ private:
         const VisibleStateKey current = BuildVisibleStateKey();
         periodic_wake_controller_->CommitVisibleState(current);
 
-        if (!rtc_->ClearTimerFlag() ||
-            !rtc_->StartCountdownTimer(PeriodicWakeController::kWakeIntervalSeconds)) {
-            ESP_LOGE(kTag, "Failed to arm PCF8563 countdown");
+        if (!rtc_->StopCountdownTimer() || !rtc_->ClearTimerFlag()) {
+            ESP_LOGE(kTag, "Failed to disable PCF8563 countdown");
             return false;
         }
 
-        ESP_LOGI(kTag, "PCF8563 countdown armed: interval=%us",
-                 PeriodicWakeController::kWakeIntervalSeconds);
+        ESP_LOGI(kTag, "Periodic refresh disabled; button wake only");
         const uint64_t wake_mask =
-            Ext1MaskFor(RTC_INT_GPIO) |
             Ext1MaskFor(TODO_CONFIRM_BUTTON_GPIO) |
             Ext1MaskFor(TODO_DOWN_BUTTON_GPIO);
         esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
@@ -1257,8 +1238,7 @@ private:
         gpio_deep_sleep_hold_en();
 
         ESP_LOGI(kTag,
-                 "Deep sleep: wake in %us, mask=0x%llx meeting=%llu notes=%llu",
-                 PeriodicWakeController::kWakeIntervalSeconds,
+                 "Deep sleep: button wake only, mask=0x%llx meeting=%llu notes=%llu",
                  static_cast<unsigned long long>(wake_mask),
                  static_cast<unsigned long long>(
                      g_retained_visible_state.meeting_version),

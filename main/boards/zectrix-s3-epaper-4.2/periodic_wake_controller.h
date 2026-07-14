@@ -23,7 +23,6 @@ struct PeriodicWakeInputs {
 
 class PeriodicWakeController {
 public:
-    static constexpr uint8_t kWakeIntervalSeconds = 20;
     static constexpr int64_t kRtcNetworkBudgetMs = 12000;
     static constexpr int64_t kUserAwakeWindowMs = 30000;
     static constexpr int64_t kDisplayIdleTimeoutMs = 8000;

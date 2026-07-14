@@ -16,9 +16,9 @@ def controller_source(path: Path) -> str:
     return path.read_text(encoding="utf-8") if path.exists() else ""
 
 
-def test_periodic_wake_policy_has_exact_timing_contract():
+def test_sleep_policy_has_no_periodic_wake_interval():
     header = controller_source(CONTROLLER_H_PATH)
-    assert "kWakeIntervalSeconds = 20" in header
+    assert "kWakeIntervalSeconds" not in header
     assert "kRtcNetworkBudgetMs = 12000" in header
     assert "kUserAwakeWindowMs = 30000" in header
     assert "kDisplayIdleTimeoutMs = 8000" in header
@@ -50,14 +50,17 @@ def test_rtc_wake_preserves_panel_and_suspends_physical_refresh():
     assert "refresh_suspended_ = discard_pending" in DISPLAY_CC
 
 
-def test_board_arms_pcf8563_and_ext1_any_low_before_deep_sleep():
-    assert "StartCountdownTimer(PeriodicWakeController::kWakeIntervalSeconds)" in BOARD
-    assert "esp_sleep_enable_ext1_wakeup" in BOARD
-    assert "ESP_EXT1_WAKEUP_ANY_LOW" in BOARD
-    assert "RTC_INT_GPIO" in BOARD
-    assert "TODO_CONFIRM_BUTTON_GPIO" in BOARD
-    assert "TODO_DOWN_BUTTON_GPIO" in BOARD
-    assert "esp_deep_sleep_start()" in BOARD
+def test_deep_sleep_disables_rtc_countdown_and_wakes_from_buttons_only():
+    sleep_body = BOARD.split("bool TryEnterDeepSleep()", 1)[1].split("void PeriodicWakeTask()", 1)[0]
+
+    assert "StopCountdownTimer()" in sleep_body
+    assert "StartCountdownTimer" not in sleep_body
+    assert "RTC_INT_GPIO" not in sleep_body
+    assert "TODO_CONFIRM_BUTTON_GPIO" in sleep_body
+    assert "TODO_DOWN_BUTTON_GPIO" in sleep_body
+    assert "esp_sleep_enable_ext1_wakeup" in sleep_body
+    assert "ESP_EXT1_WAKEUP_ANY_LOW" in sleep_body
+    assert "esp_deep_sleep_start()" in sleep_body
 
 
 def test_sleep_is_blocked_by_power_provisioning_fetch_and_display_activity():
@@ -100,12 +103,12 @@ def test_notes_fetch_does_not_allocate_snapshot_on_task_stack():
     assert "std::make_unique<gotim::NoteSnapshot>" in BOARD
 
 
-def test_rtc_cycle_logs_refresh_decision_sleep_blockers_and_arm_result():
+def test_sleep_logs_periodic_refresh_disabled():
     assert "g_rtc_wake_count" in BOARD
-    assert "RTC wake cycle=%u" in BOARD
+    assert "Periodic refresh disabled; button wake only" in BOARD
+    assert "PCF8563 countdown armed" not in BOARD
     assert "RTC visible decision: changed=%u" in BOARD
     assert "RTC sleep blocked:" in BOARD
-    assert "PCF8563 countdown armed: interval=%us" in BOARD
     assert "skip physical EPD refresh" in BOARD
 
 
