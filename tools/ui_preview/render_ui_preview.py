@@ -678,7 +678,7 @@ def identity_badge(draw: ImageDraw.ImageDraw, user: dict[str, Any], badge: dict[
     x, y, w, h = xywh
     filled_block(draw, (x, y, w, 24))
     text(draw, (x + SP_8, y + 6), badge.get("label", "会后身份 Badge"), F10, 255)
-    text(draw, (x + SP_12, y + 38), fit_text(user.get("name", "参会者"), 10), F18)
+    text(draw, (x + SP_12, y + 38), fit_text(user.get("name", "参会者"), 10), F14)
     identity_meta = f"{user.get('role', '嘉宾')} · {user.get('id', 'guest')}".strip(" ·")
     text(draw, (x + SP_12, y + 66), fit_text(identity_meta, 24), F10)
 

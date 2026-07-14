@@ -133,9 +133,12 @@ def test_badge_identity_uses_one_non_overlapping_metadata_row():
     )
     preview = (PREVIEW_DIR / "render_ui_preview.py").read_text(encoding="utf-8")
 
+    assert "attendee_name.c_str(), kPad, 38" in firmware
+    assert "attendee_name.c_str(), kPad, 38, w - 2 * kPad,\n              &BUILTIN_TEXT_FONT" in firmware
     assert "const std::string identity_meta" in firmware
     assert "attendee_role.c_str(), kPad, 64" not in firmware
     assert "attendee_id.c_str(), kPad, 74" not in firmware
+    assert 'fit_text(user.get("name", "参会者"), 10), F14' in preview
     assert "identity_meta = f" in preview
     assert "y + 74" not in preview
 

@@ -409,7 +409,7 @@ void MeetingAssistantPageAdapter::MakeIdentityBadge(lv_obj_t* parent, lv_coord_t
                                 &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
     lv_obj_set_style_text_color(label, lv_color_white(), 0);
     MakeLabel(badge, meeting_data_.attendee_name.c_str(), kPad, 38, w - 2 * kPad,
-              &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
+              &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
     const std::string identity_meta = meeting_data_.attendee_role +
         (meeting_data_.attendee_role.empty() || meeting_data_.attendee_id.empty() ? "" : " · ") +
         meeting_data_.attendee_id;
