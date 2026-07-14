@@ -27,6 +27,7 @@ constexpr lv_coord_t kQrQuietZone = 12;
 constexpr lv_coord_t kQrCardWidth = 176;
 constexpr lv_coord_t kQrCardHeight = 220;
 constexpr lv_coord_t kQrCodeSize = 132;
+constexpr int32_t kCompactTextScale = 224;
 constexpr size_t kPageCount = 4;
 
 const char* const kTitles[kPageCount] = {
@@ -104,6 +105,17 @@ lv_obj_t* MakeLabel(lv_obj_t* parent, const char* text, lv_coord_t x, lv_coord_t
     lv_obj_align(label, LV_ALIGN_TOP_LEFT, x, y);
     return label;
 }
+void ApplyCompactTextScale(lv_obj_t* label) {
+    lv_obj_set_style_transform_pivot_x(label, 0, 0);
+    lv_obj_set_style_transform_pivot_y(label, 0, 0);
+    lv_obj_set_style_transform_scale(label, kCompactTextScale, 0);
+}
+lv_obj_t* MakeCompactLabel(lv_obj_t* parent, const char* text, lv_coord_t x, lv_coord_t y, lv_coord_t w,
+                           const lv_font_t* font, lv_label_long_mode_t mode) {
+    lv_obj_t* label = MakeLabel(parent, text, x, y, w, font, mode);
+    ApplyCompactTextScale(label);
+    return label;
+}
 
 lv_obj_t* MakeWrappedLabel(lv_obj_t* parent, const char* text, lv_coord_t x, lv_coord_t y, lv_coord_t w,
                            lv_coord_t h, const lv_font_t* font = &BUILTIN_TEXT_FONT) {
@@ -119,6 +131,7 @@ lv_obj_t* MakeFilledLabel(lv_obj_t* parent, const char* text, lv_coord_t x, lv_c
     lv_obj_t* box = MakeFilledBlock(parent, x, y, w, h, 0);
     lv_obj_t* label = lv_label_create(box);
     SetFont(label, &BUILTIN_TEXT_FONT);
+    ApplyCompactTextScale(label);
     lv_obj_set_style_text_color(label, lv_color_white(), 0);
     lv_label_set_text(label, text);
     lv_obj_center(label);
@@ -141,7 +154,7 @@ void MakeVerticalRule(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t h
 
 void BuildQrTicket(lv_obj_t* parent, const char* title, const char* subtitle, const char* data,
                    lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h, lv_coord_t qr_size,
-                   const lv_font_t* title_font) {
+                   const lv_font_t* title_font, bool compact_text) {
     // Open QR ticket: no heavy outer box, keep the QR quiet zone intact.
     lv_obj_t* card = MakeSoftCard(parent, x, y, w, h, 0);
     MakeFilledBlock(card, 4, 8, 24, 4, 0);
@@ -152,9 +165,11 @@ void BuildQrTicket(lv_obj_t* parent, const char* title, const char* subtitle, co
     lv_obj_set_width(title_label, w - 2 * kPad);
     lv_label_set_long_mode(title_label, LV_LABEL_LONG_CLIP);
     lv_obj_align(title_label, LV_ALIGN_TOP_LEFT, kPad, 10);
+    if (compact_text) ApplyCompactTextScale(title_label);
 
-    MakeLabel(card, subtitle, kPad, 34, w - 2 * kPad,
-              &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    lv_obj_t* subtitle_label = MakeLabel(card, subtitle, kPad, 34, w - 2 * kPad,
+                                                &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    if (compact_text) ApplyCompactTextScale(subtitle_label);
 
     const lv_coord_t quiet_w = qr_size + 2 * kQrQuietZone;
     lv_obj_t* quiet = MakeSoftCard(card, (w - quiet_w) / 2, h - quiet_w - kQrQuietZone,
@@ -170,12 +185,12 @@ void BuildQrTicket(lv_obj_t* parent, const char* title, const char* subtitle, co
 
 void BuildKioskQrCard(lv_obj_t* parent, const char* title, const char* subtitle, const char* data,
                       lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h, lv_coord_t qr_size) {
-    BuildQrTicket(parent, title, subtitle, data, x, y, w, h, qr_size, &BUILTIN_TEXT_FONT);
+    BuildQrTicket(parent, title, subtitle, data, x, y, w, h, qr_size, &BUILTIN_TEXT_FONT, true);
 }
 
 void BuildPrimaryQrPanel(lv_obj_t* parent, const char* title, const char* subtitle, const char* data,
                          lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h) {
-    BuildQrTicket(parent, title, subtitle, data, x, y, w, h, kQrCodeSize, &SourceHanSansSC_Medium_slim);
+    BuildQrTicket(parent, title, subtitle, data, x, y, w, h, kQrCodeSize, &SourceHanSansSC_Medium_slim, false);
 }
 
 
@@ -405,36 +420,36 @@ void MeetingAssistantPageAdapter::BuildCleanInsightPage() {
 void MeetingAssistantPageAdapter::MakeIdentityBadge(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h) {
     lv_obj_t* badge = MakeSoftCard(parent, x, y, w, h, 0);
     lv_obj_t* band = MakeFilledBlock(badge, 0, 0, w, 24, 0);
-    lv_obj_t* label = MakeLabel(band, meeting_data_.badge_label.c_str(), kGap, 6, w - 2 * kGap,
+    lv_obj_t* label = MakeCompactLabel(band, meeting_data_.badge_label.c_str(), kGap, 6, w - 2 * kGap,
                                 &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
     lv_obj_set_style_text_color(label, lv_color_white(), 0);
-    MakeLabel(badge, meeting_data_.attendee_name.c_str(), kPad, 38, w - 2 * kPad,
+    MakeCompactLabel(badge, meeting_data_.attendee_name.c_str(), kPad, 38, w - 2 * kPad,
               &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
     const std::string identity_meta = meeting_data_.attendee_role +
         (meeting_data_.attendee_role.empty() || meeting_data_.attendee_id.empty() ? "" : " · ") +
         meeting_data_.attendee_id;
-    MakeLabel(badge, identity_meta.c_str(), kPad, 66, w - 2 * kPad,
+    MakeCompactLabel(badge, identity_meta.c_str(), kPad, 66, w - 2 * kPad,
               &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
 }
 
 void MeetingAssistantPageAdapter::MakeTaskList(lv_obj_t* parent, lv_coord_t x, lv_coord_t y) {
-    MakeLabel(parent, "桌面任务", x, y, 80, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    MakeCompactLabel(parent, "桌面任务", x, y, 80, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
     for (size_t i = 0; i < meeting_data_.desktop_task_count && i < 2; ++i) {
         const lv_coord_t row_y = static_cast<lv_coord_t>(y + 18 + i * 26);
-        MakeLabel(parent, meeting_data_.desktop_tasks[i].time.c_str(), x, row_y, 44,
+        MakeCompactLabel(parent, meeting_data_.desktop_tasks[i].time.c_str(), x, row_y, 44,
                   &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
-        MakeLabel(parent, meeting_data_.desktop_tasks[i].title.c_str(), x + 48, row_y - 2, 120,
+        MakeCompactLabel(parent, meeting_data_.desktop_tasks[i].title.c_str(), x + 48, row_y - 2, 120,
                   &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
     }
 }
 
 void MeetingAssistantPageAdapter::MakeHealthReminderList(lv_obj_t* parent, lv_coord_t x, lv_coord_t y) {
-    MakeLabel(parent, "健康提醒", x, y, 80, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    MakeCompactLabel(parent, "健康提醒", x, y, 80, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
     for (size_t i = 0; i < meeting_data_.health_reminder_count && i < 2; ++i) {
         const lv_coord_t row_y = static_cast<lv_coord_t>(y + 18 + i * 24);
-        MakeLabel(parent, meeting_data_.health_reminders[i].time.c_str(), x, row_y, 44,
+        MakeCompactLabel(parent, meeting_data_.health_reminders[i].time.c_str(), x, row_y, 44,
                   &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
-        MakeLabel(parent, meeting_data_.health_reminders[i].title.c_str(), x + 48, row_y - 2, 120,
+        MakeCompactLabel(parent, meeting_data_.health_reminders[i].title.c_str(), x + 48, row_y - 2, 120,
                   &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
     }
 }
@@ -448,18 +463,18 @@ void MeetingAssistantPageAdapter::BuildBadgeReminderPage() {
                      208, 28, kQrCardWidth, kQrCardHeight, kQrCodeSize);
 
     lv_obj_t* list = MakeSoftCard(content_, kMargin, 292, 180, 120, kPad);
-    MakeLabel(list, "会议提醒", 0, 0, 80, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
+    MakeCompactLabel(list, "会议提醒", 0, 0, 80, &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
     for (size_t i = 0; i < meeting_data_.reminder_count && i < 3; ++i) {
         const lv_coord_t y = static_cast<lv_coord_t>(22 + i * 30);
         const bool active = meeting_data_.active_reminder_index == static_cast<int>(i);
         if (active) {
             MakeFilledLabel(list, meeting_data_.reminders[i].time.c_str(), 0, y, 56, 24);
         } else {
-            MakeLabel(list, meeting_data_.reminders[i].time.c_str(), 0, y + 4, 56,
+            MakeCompactLabel(list, meeting_data_.reminders[i].time.c_str(), 0, y + 4, 56,
                       &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
         }
-        MakeLabel(list, meeting_data_.reminders[i].title.c_str(), 68, y + 4, 92,
-                  &SourceHanSansSC_Medium_slim, LV_LABEL_LONG_CLIP);
+        MakeCompactLabel(list, meeting_data_.reminders[i].title.c_str(), 68, y + 4, 92,
+                  &BUILTIN_TEXT_FONT, LV_LABEL_LONG_CLIP);
     }
 }
 

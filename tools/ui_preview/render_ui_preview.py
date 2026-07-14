@@ -222,7 +222,7 @@ def qr_panel(img: Image.Image, draw: ImageDraw.ImageDraw, xywh, title: str, subt
 
 def kiosk_qr_card(img: Image.Image, draw: ImageDraw.ImageDraw, xywh, title: str, subtitle: str, payload: str) -> None:
     """Small QR card: side-rail title + centered QR with a generous quiet zone."""
-    qr_panel(img, draw, xywh, title, subtitle, payload, QR_CODE_SIZE, F12)
+    qr_panel(img, draw, xywh, title, subtitle, payload, QR_CODE_SIZE, F10)
 
 
 def primary_qr_panel(img: Image.Image, draw: ImageDraw.ImageDraw, xywh, title: str, subtitle: str, payload: str) -> None:
@@ -667,18 +667,18 @@ def clean_reminder_page(img: Image.Image, draw: ImageDraw.ImageDraw, user: dict[
         if active:
             # Extend the filled emphasis across the row
             filled_block(draw, (ix + 60, row_y - 2, lw - 2 * SP_12 - 60 - 4, 28))
-        text(draw, (ix + 68, row_y + 4), fit_text(item.get("title", ""), 8), F14, title_fill)
+        text(draw, (ix + 68, row_y + 4), fit_text(item.get("title", ""), 8), F12, title_fill)
 
     # Kiosk QR on the right with the same scan target as the materials page.
     BuildQrTicket(img, draw, (208, HEADER_H + 28, QR_CARD_W, QR_CARD_H),
-                  "提醒设置", "扫码修改", reminder.get("url", "https://msh.cn/r"), QR_CODE_SIZE, F12)
+                  "提醒设置", "扫码修改", reminder.get("url", "https://msh.cn/r"), QR_CODE_SIZE, F10)
 
 
 def identity_badge(draw: ImageDraw.ImageDraw, user: dict[str, Any], badge: dict[str, Any], xywh) -> None:
     x, y, w, h = xywh
     filled_block(draw, (x, y, w, 24))
     text(draw, (x + SP_8, y + 6), badge.get("label", "会后身份 Badge"), F10, 255)
-    text(draw, (x + SP_12, y + 38), fit_text(user.get("name", "参会者"), 10), F14)
+    text(draw, (x + SP_12, y + 38), fit_text(user.get("name", "参会者"), 10), F12)
     identity_meta = f"{user.get('role', '嘉宾')} · {user.get('id', 'guest')}".strip(" ·")
     text(draw, (x + SP_12, y + 66), fit_text(identity_meta, 24), F10)
 
@@ -689,7 +689,7 @@ def task_list(draw: ImageDraw.ImageDraw, tasks: list[dict[str, Any]], xy) -> Non
     for i, item in enumerate(tasks[:2]):
         row_y = y + 18 + i * 26
         text(draw, (x, row_y), item.get("time", "--"), F10)
-        text(draw, (x + 48, row_y - 2), fit_text(item.get("title", ""), 10), F12)
+        text(draw, (x + 48, row_y - 2), fit_text(item.get("title", ""), 10), F10)
 
 
 def health_reminder_list(draw: ImageDraw.ImageDraw, items: list[dict[str, Any]], xy) -> None:
@@ -698,7 +698,7 @@ def health_reminder_list(draw: ImageDraw.ImageDraw, items: list[dict[str, Any]],
     for i, item in enumerate(items[:2]):
         row_y = y + 18 + i * 24
         text(draw, (x, row_y), item.get("time", "--"), F10)
-        text(draw, (x + 48, row_y - 2), fit_text(item.get("title", ""), 10), F12)
+        text(draw, (x + 48, row_y - 2), fit_text(item.get("title", ""), 10), F10)
 
 
 def badge_reminder_page(img: Image.Image, draw: ImageDraw.ImageDraw, data: dict[str, Any]) -> None:
@@ -709,7 +709,7 @@ def badge_reminder_page(img: Image.Image, draw: ImageDraw.ImageDraw, data: dict[
     task_list(draw, data.get("desktop_tasks", []), (MARGIN, HEADER_H + 132))
     health_reminder_list(draw, data.get("health_reminders", []), (MARGIN, HEADER_H + 188))
     BuildQrTicket(img, draw, (208, HEADER_H + 28, QR_CARD_W, QR_CARD_H),
-                  "提醒设置", "扫码修改", reminder.get("url", "https://msh.cn/r"), QR_CODE_SIZE, F12)
+                  "提醒设置", "扫码修改", reminder.get("url", "https://msh.cn/r"), QR_CODE_SIZE, F10)
 
 
 # ===========================================================================
