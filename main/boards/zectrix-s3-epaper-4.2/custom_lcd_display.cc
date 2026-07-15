@@ -131,22 +131,24 @@ void CustomLcdDisplay::lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, 
     r = clamp_rect(align_x8(r), driver->Width, driver->Height);
     if (rect_area(r) > 0) {
         driver->dirty = rect_union(driver->dirty, r);
-        driver->pending = true;
-        driver->refresh_in_progress = true;
-        driver->UpdateDisplayBusyLocked();
-        uint32_t kick_ms = kDisplayKickMs;
-        if (driver->next_kick_ms_ > 0) {
-            kick_ms = driver->next_kick_ms_;
-            driver->next_kick_ms_ = 0;
-        }
-        sm_kick(kick_ms, "display_flush");
-        //ESP_LOGI(TAG, "[FLUSH] Aligned rect: x=%d, y=%d, w=%d, h=%d", r.x, r.y, r.w, r.h);
-        //ESP_LOGI(TAG, "[FLUSH] Merged dirty: x=%d, y=%d, w=%d, h=%d (area=%d)",
-        //         driver->dirty.x, driver->dirty.y, driver->dirty.w, driver->dirty.h,
-        //         rect_area(driver->dirty));
+        if (!driver->refresh_suspended_) {
+            driver->pending = true;
+            driver->refresh_in_progress = true;
+            driver->UpdateDisplayBusyLocked();
+            uint32_t kick_ms = kDisplayKickMs;
+            if (driver->next_kick_ms_ > 0) {
+                kick_ms = driver->next_kick_ms_;
+                driver->next_kick_ms_ = 0;
+            }
+            sm_kick(kick_ms, "display_flush");
+            //ESP_LOGI(TAG, "[FLUSH] Aligned rect: x=%d, y=%d, w=%d, h=%d", r.x, r.y, r.w, r.h);
+            //ESP_LOGI(TAG, "[FLUSH] Merged dirty: x=%d, y=%d, w=%d, h=%d (area=%d)",
+            //         driver->dirty.x, driver->dirty.y, driver->dirty.w, driver->dirty.h,
+            //         rect_area(driver->dirty));
 
-        if (driver->refresh_task) {
-            xTaskNotifyGive(driver->refresh_task);
+            if (driver->refresh_task) {
+                xTaskNotifyGive(driver->refresh_task);
+            }
         }
     }
 
@@ -162,7 +164,9 @@ void CustomLcdDisplay::lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, 
 // =======================================================
 CustomLcdDisplay::CustomLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel,
                                    int width, int height, int offset_x, int offset_y,
-                                   bool mirror_x, bool mirror_y, bool swap_xy, custom_lcd_spi_t _lcd_spi_data) :
+                                   bool mirror_x, bool mirror_y, bool swap_xy,
+                                   custom_lcd_spi_t _lcd_spi_data,
+                                   bool preserve_panel_contents) :
     LcdDisplay(panel_io, panel, width, height),
     lcd_spi_data(_lcd_spi_data),
     Width(width), Height(height) {
@@ -211,14 +215,17 @@ CustomLcdDisplay::CustomLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_p
     // async defaults
     sample_interval_ms = 300;
     last_sample_tick = 0;
+    refresh_suspended_ = preserve_panel_contents;
 
-    ESP_LOGI(TAG, "EPD init");
-    EPD_Init();
-
-    // buffer初始化
-    EPD_Clear();
-    memcpy(prev_buffer, buffer, lcd_spi_data.buffer_len);
-    EPD_Display();
+    if (!preserve_panel_contents) {
+        ESP_LOGI(TAG, "EPD cold init");
+        EPD_Init();
+        EPD_Clear();
+        memcpy(prev_buffer, buffer, lcd_spi_data.buffer_len);
+        EPD_Display();
+    } else {
+        ESP_LOGI(TAG, "RTC wake: preserve panel and suspend physical refresh");
+    }
     // start async refresh
     dirty_mutex = xSemaphoreCreateMutex();
     assert(dirty_mutex);
@@ -388,6 +395,52 @@ void CustomLcdDisplay::SetNextKickMs(uint32_t kick_ms) {
     }
 }
 
+void CustomLcdDisplay::SuspendRefresh() {
+    if (dirty_mutex) {
+        xSemaphoreTake(dirty_mutex, portMAX_DELAY);
+    }
+    refresh_suspended_ = true;
+    if (dirty_mutex) {
+        xSemaphoreGive(dirty_mutex);
+    }
+}
+
+void CustomLcdDisplay::ResumeRefresh(bool force_full, bool discard_pending) {
+    bool notify_refresh = false;
+    if (dirty_mutex) {
+        xSemaphoreTake(dirty_mutex, portMAX_DELAY);
+    }
+    refresh_suspended_ = discard_pending;
+    if (discard_pending) {
+        dirty = {0, 0, 0, 0};
+        pending = false;
+        urgent_refresh = false;
+        force_full_refresh_ = false;
+        refresh_in_progress = false;
+    } else {
+        urgent_refresh = true;
+        force_full_refresh_ = force_full_refresh_ || force_full;
+        refresh_in_progress = true;
+        notify_refresh = true;
+    }
+    UpdateDisplayBusyLocked();
+    if (dirty_mutex) {
+        xSemaphoreGive(dirty_mutex);
+    }
+    if (notify_refresh && refresh_task) {
+        xTaskNotifyGive(refresh_task);
+    }
+}
+
+bool CustomLcdDisplay::PrepareForDeepSleep() {
+    if (IsRefreshPending()) {
+        return false;
+    }
+    SuspendRefresh();
+    EPD_PowerOff();
+    return true;
+}
+
 void CustomLcdDisplay::refresh_task_entry(void *arg) {
     CustomLcdDisplay *d = (CustomLcdDisplay *)arg;
     d->refresh_task_loop();
@@ -439,6 +492,14 @@ void CustomLcdDisplay::refresh_task_loop() {
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(50));
 
         TickType_t now = xTaskGetTickCount();
+
+        xSemaphoreTake(dirty_mutex, portMAX_DELAY);
+        const bool refresh_suspended = refresh_suspended_;
+        xSemaphoreGive(dirty_mutex);
+        if (refresh_suspended) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
 
         bool urgent = false;
         bool force_full = false;

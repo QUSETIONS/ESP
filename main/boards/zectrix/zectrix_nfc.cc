@@ -581,6 +581,27 @@ esp_err_t ZectrixNfc::WriteUriNdef(const std::string& uri) {
     return WriteNdef(BuildUriNdefMessage(uri));
 }
 
+esp_err_t ZectrixNfc::WriteVerifiedUriNdef(const std::string& uri) {
+    const bool supported = uri.rfind("https://", 0) == 0 || uri.rfind("http://", 0) == 0;
+    if (!supported) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    const std::vector<uint8_t> expected = BuildUriNdefMessage(uri);
+    esp_err_t err = WriteNdef(expected);
+    if (err != ESP_OK) {
+        return err;
+    }
+    std::vector<uint8_t> actual;
+    err = ReadNdef(&actual);
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (actual != expected) {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+    return ESP_OK;
+}
+
 void ZectrixNfc::FieldTaskEntry(void* arg) {
     auto* self = static_cast<ZectrixNfc*>(arg);
     if (self == nullptr) {

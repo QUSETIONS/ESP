@@ -63,7 +63,7 @@ struct MeetingData {
     size_t agenda_count = 0;
 
     std::string materials_label = "PPT / PDF";
-    std::string materials_url = "https://msh.cn/m";
+    std::string materials_url = "https://raw.githubusercontent.com/QUSETIONS/ESP/master/tools/meeting_server/files/materials.txt";
     std::string interaction_label = "提交问题";
     std::string interaction_url = "https://msh.cn/q";
 

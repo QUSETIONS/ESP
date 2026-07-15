@@ -3,6 +3,8 @@
 
 #include "lvgl_display.h"
 #include "meeting/meeting_data.h"
+#include "notes/note_data.h"
+#include "pages/sticky_note_home_page_adapter.h"
 #include "ui_page_registry.h"
 
 #include <esp_lcd_panel_io.h>
@@ -14,7 +16,6 @@
 class FactoryTestPageAdapter;
 class LabFeaturesPageAdapter;
 class MeetingAssistantPageAdapter;
-class StickyNoteHomePageAdapter;
 
 class LcdDisplay : public LvglDisplay {
 protected:
@@ -58,7 +59,12 @@ public:
     bool IsStickyNoteHomePageActive();
     void StickyNoteHomeMoveUp();
     void StickyNoteHomeMoveDown();
-    bool StickyNoteHomeConfirmOpenLab();
+    StickyNoteHomePageAdapter::Action StickyNoteHomeConfirm();
+    bool StickyNoteHomeCloseDetail();
+    bool StickyNoteHomeIsDetailOpen() const;
+    void SetStickyNoteSnapshot(const gotim::NoteSnapshot& snapshot);
+    size_t StickyNoteHomeSelectedNoteIndex() const;
+    bool StickyNoteHomeHasNotes() const;
     void SetStickyNoteNetworkHint(const std::string& title, const std::string& detail, const std::string& hint);
     void ShowLabFeaturesPage();
     bool IsLabFeaturesPageActive();

@@ -2,19 +2,42 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import datetime as dt
 import json
 import mimetypes
+import threading
+import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 try:
+    from .asr_providers import build_asr_provider
+    from .zectrix_cloud import ZectrixCloudError, build_meeting_pages, build_zectrix_client
     from .note_store import NoteValidationError, VersionConflictError, VersionedNoteStore
-    from .realtime_summary import RecordingManager, SequenceGapError, VersionedMeetingStore, format_sse
+    from .realtime_summary import (
+        AsrProviderError,
+        RecordingManager,
+        SequenceGapError,
+        VersionedMeetingStore,
+        format_sse,
+        MAX_AUDIO_CHUNK_BYTES,
+)
 except ImportError:
+    from asr_providers import build_asr_provider
+    from zectrix_cloud import ZectrixCloudError, build_meeting_pages, build_zectrix_client
     from note_store import NoteValidationError, VersionConflictError, VersionedNoteStore
-    from realtime_summary import RecordingManager, SequenceGapError, VersionedMeetingStore, format_sse
+    from realtime_summary import (
+        AsrProviderError,
+        RecordingManager,
+        SequenceGapError,
+        VersionedMeetingStore,
+        format_sse,
+        MAX_AUDIO_CHUNK_BYTES,
+)
 
 
 ROOT = Path(__file__).resolve().parent
@@ -23,24 +46,26 @@ SEED_DATA = PROJECT_ROOT / "tools" / "meeting_data" / "meeting_current.json"
 DEFAULT_DATA = ROOT / "state" / "meeting_current.json"
 DEFAULT_FILES = ROOT / "files"
 DEFAULT_NOTES = ROOT / "state" / "notes.json"
+MAX_JSON_BODY_BYTES = 2 * 1024 * 1024
 
 EDITOR_HTML = r"""<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>GoTim Ink Meeting Console</title>
+  <title>GoTim Ink Meeting Console · 会议控制台</title>
   <style>
     :root {
-      --paper: #f7f4ea;
-      --surface: #fffdf7;
-      --ink: #1d1d1b;
-      --muted: #6d6b62;
-      --line: #d7d0bd;
-      --green: #1f7a5b;
+      --paper: #eef2f4;
+      --surface: #ffffff;
+      --ink: #202a31;
+      --muted: #65737b;
+      --line: #ced8dd;
+      --green: #14745f;
       --red: #b44a3a;
-      --blue: #345f8a;
-      --shadow: 0 18px 38px rgba(40, 37, 28, 0.12);
+      --blue: #27658e;
+      --amber: #a56a18;
+      --shadow: 0 8px 22px rgba(31, 48, 58, 0.08);
     }
 
     * {
@@ -49,10 +74,7 @@ EDITOR_HTML = r"""<!doctype html>
 
     body {
       margin: 0;
-      background:
-        linear-gradient(90deg, rgba(29, 29, 27, 0.035) 1px, transparent 1px) 0 0 / 20px 20px,
-        linear-gradient(0deg, rgba(29, 29, 27, 0.03) 1px, transparent 1px) 0 0 / 20px 20px,
-        var(--paper);
+      background: var(--paper);
       color: var(--ink);
       font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       letter-spacing: 0;
@@ -81,7 +103,7 @@ EDITOR_HTML = r"""<!doctype html>
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
       gap: 14px;
-      align-items: end;
+      align-items: center;
       padding: 0 0 14px;
       border-bottom: 2px solid var(--ink);
     }
@@ -106,7 +128,7 @@ EDITOR_HTML = r"""<!doctype html>
 
     h1 {
       margin: 0;
-      font-size: clamp(20px, 3.5vw, 34px);
+      font-size: 30px;
       line-height: 1.05;
       letter-spacing: 0;
     }
@@ -118,6 +140,9 @@ EDITOR_HTML = r"""<!doctype html>
     }
 
     .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
       justify-self: end;
       max-width: 420px;
       min-height: 38px;
@@ -126,6 +151,98 @@ EDITOR_HTML = r"""<!doctype html>
       background: rgba(255, 253, 247, 0.72);
       color: var(--muted);
       font-size: 13px;
+    }
+
+    .status::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0 3px rgba(20, 116, 95, 0.12);
+      flex: 0 0 auto;
+    }
+
+    .controlPlane {
+      display: grid;
+      grid-template-columns: minmax(180px, 0.85fr) minmax(0, 2.6fr) 36px;
+      gap: 0;
+      align-items: stretch;
+      min-height: 76px;
+      margin-top: 12px;
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--blue);
+      background: var(--surface);
+      box-shadow: 0 4px 12px rgba(31, 48, 58, 0.05);
+    }
+
+    .controlLead {
+      display: grid;
+      align-content: center;
+      gap: 3px;
+      min-width: 0;
+      padding: 11px 14px;
+    }
+
+    .controlEyebrow,
+    .controlLead span,
+    .controlMetric dt {
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.2;
+    }
+
+    .controlEyebrow {
+      color: var(--blue);
+      font-weight: 800;
+    }
+
+    .controlLead strong,
+    .controlMetric dd {
+      overflow-wrap: anywhere;
+    }
+
+    .controlLead strong {
+      font-size: 15px;
+      line-height: 1.2;
+    }
+
+    .controlMetrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin: 0;
+      min-width: 0;
+    }
+
+    .controlMetric {
+      display: grid;
+      align-content: center;
+      gap: 6px;
+      min-width: 0;
+      margin: 0;
+      padding: 10px 12px;
+      border-left: 1px solid var(--line);
+    }
+
+    .controlMetric dd {
+      margin: 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      font-weight: 800;
+      line-height: 1.3;
+    }
+
+    .controlRefresh {
+      align-self: center;
+      width: 30px;
+      min-height: 30px;
+      margin: 0 6px 0 0;
+      padding: 0;
+      border-color: var(--line);
+      background: transparent;
+      color: var(--ink);
+      font-size: 18px;
+      line-height: 1;
     }
 
     .layout {
@@ -144,7 +261,7 @@ EDITOR_HTML = r"""<!doctype html>
     .panel {
       background: var(--surface);
       border: 1px solid var(--line);
-      border-radius: 8px;
+      border-radius: 6px;
       box-shadow: var(--shadow);
       overflow: clip;
     }
@@ -166,6 +283,12 @@ EDITOR_HTML = r"""<!doctype html>
     }
 
     .panelHead span {
+      min-width: 0;
+      max-width: 58%;
+      overflow: hidden;
+      text-align: right;
+      text-overflow: ellipsis;
+      white-space: nowrap;
       color: var(--muted);
       font-size: 12px;
     }
@@ -343,11 +466,189 @@ EDITOR_HTML = r"""<!doctype html>
       line-height: 1.45;
     }
 
+    .realtimeOutput {
+      display: grid;
+      gap: 10px;
+      margin-top: 12px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      background: #fbfaf4;
+    }
+
+    .realtimeHeader,
+    .realtimeRow {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: baseline;
+    }
+
+    .realtimeHeader {
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 8px;
+    }
+
+    .realtimeHeader span,
+    .realtimeMeta {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .realtimeColumns {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .realtimeBlock {
+      min-width: 0;
+      padding-top: 8px;
+      border-top: 1px solid var(--line);
+    }
+
+    .realtimeBlock h3 {
+      margin: 0 0 6px;
+      font-size: 12px;
+    }
+
+    .realtimeList {
+      display: grid;
+      gap: 5px;
+      margin: 0;
+      padding-left: 18px;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .realtimeTranscript {
+      max-height: 190px;
+      overflow: auto;
+      border-top: 1px solid var(--line);
+      padding-top: 8px;
+    }
+
+    .realtimeSegment {
+      display: grid;
+      grid-template-columns: 82px minmax(0, 1fr);
+      gap: 8px;
+      padding: 5px 0;
+      border-bottom: 1px dotted var(--line);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .realtimeSegment strong,
+    .realtimeSegment span {
+      overflow-wrap: anywhere;
+    }
+
+    .realtimeMetrics {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 6px;
+    }
+
+    .realtimeMetric {
+      min-width: 0;
+      padding: 7px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+    }
+
+    .realtimeMetric strong,
+    .realtimeMetric span {
+      display: block;
+      overflow-wrap: anywhere;
+    }
+
+    .realtimeMetric strong {
+      font-size: 16px;
+      line-height: 1.1;
+    }
+
+    .realtimeMetric span {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 10px;
+    }
+
     .error {
       color: var(--red);
     }
 
-    @media (max-width: 700px) { .notesLayout { grid-template-columns: 1fr; } }
+    .cloudPanel {
+      border-top: 3px solid var(--blue);
+    }
+
+    .cloudState {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .cloudDot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--muted);
+      flex: 0 0 auto;
+    }
+
+    .cloudDot.online { background: var(--green); }
+    .cloudDot.warn { background: var(--amber); }
+    .cloudDot.error { background: var(--red); }
+
+    .cloudDevices {
+      display: grid;
+      gap: 6px;
+      margin-top: 10px;
+    }
+
+    .cloudDevice {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      background: #f7fafb;
+      font-size: 12px;
+    }
+
+    .cloudDevice strong,
+    .cloudDevice span { overflow-wrap: anywhere; }
+    .cloudDevice span { color: var(--muted); text-align: right; }
+
+    nav { display: flex; gap: 8px; padding: 12px 0 0; }
+    nav button { min-height: 34px; padding: 6px 14px; background: transparent; color: var(--ink); border-color: var(--line); }
+    nav button[aria-selected="true"] { background: var(--ink); color: #fffdf7; }
+    .notesView { padding-top: 18px; }
+    .notesHeader { display: flex; justify-content: space-between; align-items: end; gap: 12px; margin-bottom: 12px; }
+    .notesHeader h2 { margin: 0; font-size: 20px; }
+    .notesHeader p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+    .notesLayout { display: grid; grid-template-columns: minmax(230px, 0.72fr) minmax(0, 1.28fr); gap: 14px; align-items: start; }
+    .notesListPanel, .noteFormPanel { min-width: 0; background: transparent; border: 0; border-radius: 0; box-shadow: none; }
+    .notesListPanel, .noteFormPanel { overflow: hidden; }
+    .notesListHead, .noteFormHead { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); background: rgba(247, 244, 234, 0.72); }
+    .notesListHead strong, .noteFormHead strong { font-size: 14px; }
+    .notesListHead span, .noteFormHead span, .byteCount { color: var(--muted); font-size: 11px; }
+    .notesList { display: grid; gap: 6px; padding: 10px; }
+    .noteRow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 8px; border: 1px solid transparent; border-radius: 6px; background: #fffefa; }
+    .noteRow.selected { border-color: var(--green); background: #edf5ef; }
+    .noteSelect { min-width: 0; padding: 5px 0; border: 0; background: transparent; color: var(--ink); text-align: left; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .noteSelect.completed { color: var(--muted); text-decoration: line-through; }
+    .noteMeta { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .noteRowActions { display: flex; gap: 4px; }
+    .iconButton { width: 30px; min-height: 30px; padding: 4px; border-color: var(--line); background: transparent; color: var(--ink); font-size: 13px; }
+    .noteEmpty { padding: 22px 14px; color: var(--muted); font-size: 13px; text-align: center; }
+    .noteForm { display: grid; gap: 12px; padding: 14px; }
+    .noteForm textarea { min-height: 180px; max-height: 42vh; font-family: inherit; font-size: 14px; }
+    .noteCheck { display: flex; align-items: center; gap: 8px; color: var(--ink); font-size: 13px; }
+    .noteCheck input { width: 18px; height: 18px; accent-color: var(--green); }
+    .noteError { min-height: 20px; color: var(--red); font-size: 12px; line-height: 1.4; }
+    .notesHidden { display: none; }
+    @media (max-width: 700px) { .notesLayout { grid-template-columns: 1fr; } .notesHeader { align-items: start; flex-direction: column; } }
 
     @media (max-width: 860px) {
       .topbar,
@@ -357,16 +658,52 @@ EDITOR_HTML = r"""<!doctype html>
       }
 
       .status {
-        justify-self: stretch;
-        max-width: none;
+        justify-self: start;
+        max-width: 100%;
       }
 
       .previewRail {
         position: static;
       }
+
+      .controlPlane {
+        grid-template-columns: minmax(0, 1fr) 36px;
+      }
+
+      .controlMetrics {
+        grid-column: 1 / -1;
+        grid-row: 2;
+        border-top: 1px solid var(--line);
+      }
+
+      .controlRefresh {
+        grid-column: 2;
+        grid-row: 1;
+      }
     }
 
     @media (max-width: 520px) {
+      .topbar { gap: 10px; }
+
+      h1 { font-size: 20px; }
+
+      .status {
+        width: fit-content;
+        min-height: 32px;
+        padding: 6px 9px;
+      }
+
+      nav {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        padding: 9px 0;
+        border-bottom: 1px solid var(--line);
+        background: var(--paper);
+      }
+
+      .panelHead > span { display: none; }
+
       .app {
         width: min(100% - 18px, 1180px);
         padding-top: 10px;
@@ -381,6 +718,18 @@ EDITOR_HTML = r"""<!doctype html>
       .actions button {
         flex: 1 1 132px;
       }
+
+      .controlMetrics {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .controlMetric:nth-child(odd) {
+        border-left: 0;
+      }
+
+      .controlMetric:nth-child(n + 3) {
+        border-top: 1px solid var(--line);
+      }
     }
   </style>
 </head>
@@ -390,15 +739,33 @@ EDITOR_HTML = r"""<!doctype html>
       <div class="brand">
         <div class="mark">GT</div>
         <div>
-          <h1>GoTim Ink Meeting Console</h1>
-          <p class="subtitle">本地会议控制台，修改后墨水屏继续读取同一套接口</p>
+          <h1>GoTim Ink 会议控制台</h1>
+          <p class="subtitle">极趣实验室 · 现场会议与墨水屏同步</p>
         </div>
       </div>
-      <div id="status" class="status">正在读取会议数据...</div>
+      <div id="status" class="status" role="status">正在读取会议数据...</div>
     </header>
 
-    <nav><button id="notesTab" onclick="showNotes()">便签</button></nav>
-    <section class="layout">
+    <section id="controlPlane" class="controlPlane" aria-label="现场运行状态" aria-live="polite">
+      <div class="controlLead">
+        <span class="controlEyebrow">现场控制面</span>
+        <strong id="overviewMeeting">正在读取会议版本</strong>
+        <span id="overviewUpdated">等待后台状态</span>
+      </div>
+      <dl class="controlMetrics">
+        <div class="controlMetric"><dt>实时总结</dt><dd id="overviewTranscript">等待状态</dd></div>
+        <div class="controlMetric"><dt>便利贴</dt><dd id="overviewNotes">等待状态</dd></div>
+        <div class="controlMetric"><dt>云端设备</dt><dd id="overviewCloud">等待状态</dd></div>
+        <div class="controlMetric"><dt>最近群发</dt><dd id="overviewFleet">尚未推送</dd></div>
+      </dl>
+      <button class="controlRefresh" type="button" title="刷新全部状态" aria-label="刷新全部状态" onclick="loadOverview()">↻</button>
+    </section>
+
+    <nav role="tablist" aria-label="工作区">
+      <button id="meetingTab" role="tab" aria-selected="true" aria-controls="meetingView" onclick="showMeeting()">会议控制台</button>
+      <button id="notesTab" role="tab" aria-selected="false" aria-controls="notesView" onclick="showNotes()">便利贴</button>
+    </nav>
+    <section id="meetingView" class="layout" role="tabpanel" aria-labelledby="meetingTab">
       <div class="stack">
         <section class="panel">
           <div class="panelHead">
@@ -494,6 +861,15 @@ EDITOR_HTML = r"""<!doctype html>
             </div>
             <div id="recordingState" class="hint">等待录音；拒绝麦克风权限时仍可手工输入纪要。</div>
             <textarea id="transcriptEditor" placeholder="Jasper：客户希望只带 iPhone 和墨水屏完成演示&#10;客户：二维码要能下载会议资料"></textarea>
+            <div id="realtimeOutput" class="realtimeOutput" aria-live="polite">
+              <div class="realtimeHeader"><strong>实时结果</strong><span id="realtimeProvider">等待后台状态</span></div>
+              <div id="realtimeAudioState" class="hint">尚未收到音频片段。</div>
+              <div class="realtimeTranscript" id="realtimeTranscript"><div class="hint">开始录音或发送手工纪要后，这里会显示转写。</div></div>
+              <div class="realtimeColumns">
+                <section class="realtimeBlock"><h3>摘要与关键决定</h3><ul id="realtimeBullets" class="realtimeList"><li class="hint">暂无摘要</li></ul><ul id="realtimeDecisions" class="realtimeList"><li class="hint">暂无决定</li></ul></section>
+                <section class="realtimeBlock"><h3>指标与待办</h3><div id="realtimeMetrics" class="realtimeMetrics"></div><ul id="realtimeActions" class="realtimeList"><li class="hint">暂无待办</li></ul></section>
+              </div>
+            </div>
             <div class="field" style="margin-top: 10px;">
               <label for="keywords">关键词，逗号分隔</label>
               <input id="keywords" autocomplete="off" placeholder="iPhone,二维码,会议摘要">
@@ -522,18 +898,29 @@ EDITOR_HTML = r"""<!doctype html>
             </div>
           </div>
         </section>
-        <section class="panel">
+        <section class="panel cloudPanel">
           <div class="panelHead">
-            <h2>操作口径</h2>
-            <span>Demo</span>
+            <h2>云端设备</h2>
+            <span id="zectrixConnection">未检查</span>
           </div>
           <div class="body">
-            <p class="hint">手机和电脑在同一个网络时，手机打开这个页面即可改议程、材料链接和提醒。保存后设备端下一次拉取 `/meeting/current` 会看到新内容。</p>
+            <div class="cloudState"><i id="zectrixDot" class="cloudDot"></i><span id="zectrixDevices">正在读取云端状态...</span></div>
+            <div id="zectrixDeviceList" class="cloudDevices"></div>
+            <div class="actions">
+              <button class="secondary" type="button" onclick="checkZectrixIntegration()">检查云端设备</button>
+            </div>
+            <p class="hint">后台从 ZECTRIX_API_KEY 或 ZECTRIX_API_KEY_FILE 读取密钥，不会进入浏览器或会议 JSON。</p>
           </div>
         </section>
       </aside>
     </section>
-    <section id="notesView" hidden><div class="notesLayout"><div id="notesList"></div><p id="notesListEmpty">暂无便签</p><div><p id="noteEditorEmpty">请选择便签</p><form id="noteEditor" onsubmit="saveNote(event)"><input id="noteTitle"><span id="noteTitleBytes"></span><textarea id="noteBody"></textarea><span id="noteBodyBytes"></span><input id="noteCompleted" type="checkbox"><input id="noteRemindAt" type="datetime-local"><div id="noteError"></div><button id="saveNoteButton">保存</button><button id="deleteNoteButton" type="button" onclick="deleteNote()">删除</button><button id="reloadStaleNote" type="button" onclick="reloadSelectedNote()">重载</button></form><button id="newNote" onclick="selectNote(null)">新建</button></div></div></section>
+    <section id="notesView" class="notesView notesHidden" role="tabpanel" aria-labelledby="notesTab">
+      <div class="notesHeader"><div><h2>我的便利贴</h2><p>保存在后台，设备联网后自动同步</p></div><button id="newNote" class="positive" type="button" onclick="selectNote(null)">新建便利贴</button></div>
+      <div class="notesLayout">
+        <section class="notesListPanel" aria-label="便利贴列表"><div class="notesListHead"><strong>便签列表</strong><span id="notesVersion">v0</span></div><div id="notesList" class="notesList"></div><p id="notesListEmpty" class="noteEmpty" hidden>还没有便利贴</p></section>
+        <section class="noteFormPanel" aria-label="便利贴编辑器"><div class="noteFormHead"><strong id="noteEditorTitle">编辑便利贴</strong><span id="noteEditorState">未选择</span></div><p id="noteEditorEmpty" class="noteEmpty">选择一条便利贴，或新建一条。</p><form id="noteEditor" class="noteForm" onsubmit="saveNote(event)" hidden><div class="field"><label for="noteTitle">标题</label><input id="noteTitle" maxlength="48" autocomplete="off"><span id="noteTitleBytes" class="byteCount">0 / 48 bytes</span></div><div class="field"><label for="noteBody">内容</label><textarea id="noteBody" maxlength="384"></textarea><span id="noteBodyBytes" class="byteCount">0 / 384 bytes</span></div><label class="noteCheck"><input id="noteCompleted" type="checkbox">已完成</label><div class="field"><label for="noteRemindAt">提醒时间</label><input id="noteRemindAt" type="datetime-local"></div><div id="noteError" class="noteError" role="alert"></div><div class="actions"><button id="saveNoteButton" class="positive" type="submit">保存</button><button id="deleteNoteButton" class="secondary" type="button" onclick="deleteNote()">删除</button><button id="reloadStaleNote" class="secondary" type="button" onclick="reloadSelectedNote()" hidden>重新载入</button></div></form></section>
+      </div>
+    </section>
   </main>
   <script>
     let currentMeeting = {};
@@ -543,15 +930,36 @@ EDITOR_HTML = r"""<!doctype html>
     let recordingSessionId = null;
     let recordingSequence = 0;
     let eventSource = null, notesState={version:0,notes:[]}, selectedNoteId=null, noteFormDirty=false;
+    let uploadChain = Promise.resolve();
+    let overviewTimer = null;
     const MAX_NOTE_TITLE_BYTES = 48, MAX_NOTE_BODY_BYTES = 384;
-    function showNotes(){document.getElementById("notesView").hidden=false;loadNotes();}
+    function showMeeting() {
+      document.getElementById("meetingView").classList.remove("notesHidden");
+      document.getElementById("notesView").classList.add("notesHidden");
+      document.getElementById("meetingTab").setAttribute("aria-selected", "true");
+      document.getElementById("notesTab").setAttribute("aria-selected", "false");
+    }
+
+    function showNotes() {
+      document.getElementById("meetingView").classList.add("notesHidden");
+      document.getElementById("notesView").classList.remove("notesHidden");
+      document.getElementById("notesTab").setAttribute("aria-selected", "true");
+      document.getElementById("meetingTab").setAttribute("aria-selected", "false");
+      loadNotes();
+    }
 
     function setRecordingButtons(state) {
       document.getElementById("startRecording").disabled = state !== "idle";
       document.getElementById("pauseRecording").disabled = state !== "recording";
       document.getElementById("resumeRecording").disabled = state !== "paused";
-      document.getElementById("stopRecording").disabled = !["recording", "paused"].includes(state);
-      document.getElementById("recordingState").textContent = {idle: "等待录音", recording: "正在录音并实时同步", paused: "录音已暂停", finalizing: "正在生成最终总结"}[state] || state;
+      document.getElementById("stopRecording").disabled = !["recording", "paused", "error"].includes(state);
+      document.getElementById("recordingState").textContent = {
+        idle: "等待录音；也可以直接发送手工纪要",
+        recording: "录音进行中，音频按顺序上传后台",
+        paused: "录音已暂停",
+        finalizing: "正在等待 ASR 收尾并生成最终总结",
+        error: "ASR 失败；已保留音频记录，可重试当前片段",
+      }[state] || state;
     }
 
     function blobToBase64(blob) {
@@ -566,10 +974,18 @@ EDITOR_HTML = r"""<!doctype html>
     async function uploadChunk(blob) {
       if (!recordingSessionId || blob.size === 0) return;
       const sequence = recordingSequence++;
+      const sessionId = recordingSessionId;
       const audio_b64 = await blobToBase64(blob);
-      await fetchJson(`/api/recordings/${recordingSessionId}/chunks`, {
+      await fetchJson(`/api/recordings/${sessionId}/chunks`, {
         method: "POST",
-        body: JSON.stringify({sequence, speaker: document.getElementById("speakerLabel").value.trim() || "未知发言人", mime_type: mediaRecorder.mimeType, audio_b64})
+        body: JSON.stringify({
+          sequence,
+          meeting_id: currentMeeting.meeting_id || "meeting",
+          speaker: document.getElementById("speakerLabel").value.trim() || "未知发言人",
+          mime_type: mediaRecorder.mimeType,
+          client_timestamp: new Date().toISOString(),
+          audio_b64,
+        })
       });
     }
 
@@ -580,7 +996,11 @@ EDITOR_HTML = r"""<!doctype html>
         const created = await fetchJson("/api/recordings", {method: "POST", body: JSON.stringify({meeting_id: currentMeeting.meeting_id || "meeting", mime_type: mediaRecorder.mimeType})});
         recordingSessionId = created.session_id;
         recordingSequence = 0;
-        mediaRecorder.ondataavailable = (event) => uploadChunk(event.data).catch((error) => setStatus(error.message, true));
+        uploadChain = Promise.resolve();
+        mediaRecorder.ondataavailable = (event) => {
+          uploadChain = uploadChain.then(() => uploadChunk(event.data));
+          uploadChain.catch((error) => setStatus(`音频上传失败：${error.message}`, true));
+        };
         mediaRecorder.start(2000);
         setRecordingButtons("recording");
       } catch (error) {
@@ -602,20 +1022,42 @@ EDITOR_HTML = r"""<!doctype html>
     }
 
     async function stopRecordingSession() {
+      const sessionId = recordingSessionId;
+      if (!mediaRecorder || !sessionId) return;
       setRecordingButtons("finalizing");
+      const stopped = new Promise((resolve) => mediaRecorder.addEventListener("stop", resolve, {once: true}));
       mediaRecorder.stop();
       mediaStream.getTracks().forEach((track) => track.stop());
-      await fetchJson(`/api/recordings/${recordingSessionId}/stop`, {method: "POST", body: "{}"});
-      recordingSessionId = null;
-      await loadMeeting();
-      setRecordingButtons("idle");
+      await stopped;
+      try { await uploadChain; } catch (error) { setStatus(`音频上传失败，已保留可用片段：${error.message}`, true); }
+      try {
+        await fetchJson(`/api/recordings/${sessionId}/stop`, {method: "POST", body: "{}"});
+        await loadMeeting();
+      } catch (error) {
+        setStatus(`结束录音失败：${error.message}`, true);
+      } finally {
+        recordingSessionId = null;
+        mediaRecorder = null;
+        mediaStream = null;
+        setRecordingButtons("idle");
+      }
     }
 
     function connectEvents() {
       if (eventSource) eventSource.close();
       eventSource = new EventSource("/api/events");
-      ["transcript", "summary", "status"].forEach((name) => eventSource.addEventListener(name, () => loadMeeting()));
-      eventSource.addEventListener("notes", () => loadNotes({preserveDirty: true}));
+      ["transcript", "summary", "status", "meeting", "fleet"].forEach((name) => eventSource.addEventListener(name, () => loadMeeting({quiet: true})));
+      eventSource.addEventListener("error", (event) => {
+        let detail = "ASR 或后台处理失败";
+        try { detail = JSON.parse(event.data).message || detail; } catch {}
+        setStatus(detail, true);
+        loadMeeting({quiet: true});
+      });
+      eventSource.addEventListener("fleet", () => loadOverview({quiet: true}));
+      eventSource.addEventListener("notes", () => {
+        loadNotes({preserveDirty: true});
+        loadOverview({quiet: true});
+      });
       eventSource.onerror = () => setStatus("实时连接中断，正在自动重连", true);
     }
 
@@ -640,18 +1082,179 @@ EDITOR_HTML = r"""<!doctype html>
       return payload;
     }
 
-    function setNoteError(message=""){document.getElementById("noteError").textContent=message;}
-    function noteSize(v){return new TextEncoder().encode(v).length;}
-    function validateNoteForm(){if(noteSize(noteTitle.value)>MAX_NOTE_TITLE_BYTES||noteSize(noteBody.value)>MAX_NOTE_BODY_BYTES)throw new Error("超过 UTF-8 字节限制");}
-    function applyNotesSnapshot(data,preserveDirty=false){notesState=data;renderNotes();if (!preserveDirty || !noteFormDirty){const n=data.notes.find(x=>x.id===selectedNoteId);if(n)selectNote(n.id);}}
-    async function loadNotes({preserveDirty=false}={}){try{applyNotesSnapshot(await fetchJson("/notes"),preserveDirty);}catch(error){setNoteError(error.message);}}
-    function renderNotes(){notesListEmpty.hidden=!!notesState.notes.length;notesList.innerHTML=notesState.notes.map((n,i)=>`<div><button onclick="selectNote('${n.id}')">${escapeHtml(n.title||"无标题")}</button><button title="上移" onclick="moveNote('${n.id}',-1)">↑</button><button title="下移" onclick="moveNote('${n.id}',1)">↓</button><button title="删除" onclick="deleteNote('${n.id}')">×</button><button onclick="toggleNote('${n.id}')">完成</button></div>`).join("");}
-    function selectNote(id){selectedNoteId=id;const n=notesState.notes.find(x=>x.id===id)||{};noteTitle.value=n.title||"";noteBody.value=n.body||"";noteCompleted.checked=!!n.completed;noteRemindAt.value=n.remind_at?n.remind_at.slice(0,16):"";noteFormDirty=false;}
-    async function saveNote(e){e.preventDefault();try{validateNoteForm();const body=JSON.stringify({title:noteTitle.value,body:noteBody.value,completed:noteCompleted.checked,remind_at:noteRemindAt.value?new Date(noteRemindAt.value).toISOString():null,base_version:notesState.version});const p=await fetchJson(selectedNoteId?`/notes/${selectedNoteId}`:"/notes",{method: selectedNoteId ? "PATCH" : "POST",body});selectedNoteId=p.note?.id||selectedNoteId;applyNotesSnapshot(p.data);}catch(error){if(error.status === 409){applyNotesSnapshot(error.payload.data, true);}setNoteError(error.message);}}
-    async function toggleNote(id){const n=notesState.notes.find(x=>x.id===id);const p=await fetchJson(`/notes/${id}`,{method:"PATCH",body:JSON.stringify({completed:!n.completed,base_version:notesState.version})});applyNotesSnapshot(p.data,true);}
-    async function deleteNote(id=selectedNoteId){if(!id||!window.confirm("删除？"))return;const p=await fetchJson(`/notes/${id}`,{method: "DELETE", body:JSON.stringify({base_version:notesState.version})});applyNotesSnapshot(p.data);}
-    async function moveNote(id,d){const ids=notesState.notes.map(n=>n.id),a=ids.indexOf(id),b=a+d;if(b<0||b>=ids.length)return;[ids[a],ids[b]]=[ids[b],ids[a]];const p=await fetchJson("/notes/reorder",{method: "PUT", body:JSON.stringify({ids,base_version:notesState.version})});applyNotesSnapshot(p.data,true);}
-    function reloadSelectedNote(){noteFormDirty=false;applyNotesSnapshot(notesState);}
+    function overviewTime(value) {
+      if (!value) return "等待首次保存";
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+    }
+
+    function renderOverview(overview) {
+      const meeting = overview.meeting || {};
+      const server = overview.server || {};
+      const notes = overview.notes || {};
+      const cloud = overview.zectrix || {};
+      const fleet = overview.fleet || {};
+      const lastPush = fleet.last_push || null;
+      document.getElementById("overviewMeeting").textContent = (meeting.meeting_id || "local-demo") + " · v" + (meeting.version || 0);
+      document.getElementById("overviewUpdated").textContent = "会议更新 " + overviewTime(meeting.updated_at);
+      const asrMode = server.real_audio_transcription ? "实时 ASR" : "Demo ASR";
+      document.getElementById("overviewTranscript").textContent = (meeting.transcript_status || "idle") + " · " + asrMode;
+      document.getElementById("overviewNotes").textContent = (notes.count || 0) + " 条 · v" + (notes.version || 0);
+      document.getElementById("overviewCloud").textContent = !cloud.configured
+        ? "未配置密钥"
+        : !cloud.reachable
+          ? "连接异常"
+          : (cloud.device_count || 0) + " 台在线";
+      const fleetLabels = {pushed: "已全部推送", partial: "部分完成", error: "推送失败", no_devices: "暂无设备"};
+      document.getElementById("overviewFleet").textContent = lastPush
+        ? (fleetLabels[lastPush.status] || lastPush.status || "已记录") + " · " + overviewTime(lastPush.requested_at)
+        : "尚未推送";
+    }
+
+    async function loadOverview({quiet = false} = {}) {
+      try {
+        const payload = await fetchJson("/api/overview");
+        renderOverview(payload.data || {});
+        if (!quiet) setStatus("后台状态已刷新");
+        return payload.data;
+      } catch (error) {
+        if (!quiet) setStatus("后台状态读取失败：" + error.message, true);
+        return null;
+      }
+    }
+
+    function setNoteError(message = "") {
+      document.getElementById("noteError").textContent = message;
+    }
+
+    function noteSize(value) {
+      return new TextEncoder().encode(value).length;
+    }
+
+    function updateNoteByteCounts() {
+      document.getElementById("noteTitleBytes").textContent = `${noteSize(noteTitle.value)} / ${MAX_NOTE_TITLE_BYTES} bytes`;
+      document.getElementById("noteBodyBytes").textContent = `${noteSize(noteBody.value)} / ${MAX_NOTE_BODY_BYTES} bytes`;
+    }
+
+    function validateNoteForm() {
+      updateNoteByteCounts();
+      if (noteSize(noteTitle.value) > MAX_NOTE_TITLE_BYTES) throw new Error("标题超过 UTF-8 字节限制");
+      if (noteSize(noteBody.value) > MAX_NOTE_BODY_BYTES) throw new Error("内容超过 UTF-8 字节限制");
+    }
+
+    function applyNotesSnapshot(data, preserveDirty = false) {
+      notesState = data || {version: 0, notes: []};
+      document.getElementById("notesVersion").textContent = `v${notesState.version || 0}`;
+      renderNotes();
+      if (!preserveDirty || !noteFormDirty) {
+        const note = notesState.notes.find((item) => item.id === selectedNoteId);
+        if (note) selectNote(note.id);
+        else if (selectedNoteId) selectNote(null);
+      }
+    }
+
+    async function loadNotes({preserveDirty = false} = {}) {
+      try {
+        applyNotesSnapshot(await fetchJson("/notes"), preserveDirty);
+      } catch (error) {
+        setNoteError(error.message);
+      }
+    }
+
+    function renderNotes() {
+      const list = document.getElementById("notesList");
+      const empty = document.getElementById("notesListEmpty");
+      empty.hidden = notesState.notes.length > 0;
+      list.innerHTML = notesState.notes.map((note, index) => {
+        const reminder = note.remind_at ? `提醒 ${escapeHtml(new Date(note.remind_at).toLocaleString())}` : "无提醒";
+        return `<div class="noteRow ${note.id === selectedNoteId ? "selected" : ""}"><button class="noteSelect ${note.completed ? "completed" : ""}" type="button" onclick="selectNote('${note.id}')">${escapeHtml(note.title || "无标题")}<span class="noteMeta">${escapeHtml(reminder)}${note.completed ? " · 已完成" : ""}</span></button><div class="noteRowActions"><button class="iconButton" type="button" title="上移" aria-label="上移" ${index === 0 ? "disabled" : ""} onclick="moveNote('${note.id}', -1)">↑</button><button class="iconButton" type="button" title="下移" aria-label="下移" ${index === notesState.notes.length - 1 ? "disabled" : ""} onclick="moveNote('${note.id}', 1)">↓</button><button class="iconButton" type="button" title="删除" aria-label="删除" onclick="deleteNote('${note.id}')">×</button></div></div>`;
+      }).join("");
+    }
+
+    function selectNote(id) {
+      selectedNoteId = id;
+      const note = notesState.notes.find((item) => item.id === id);
+      const form = document.getElementById("noteEditor");
+      const empty = document.getElementById("noteEditorEmpty");
+      form.hidden = !id && id !== null;
+      if (id === null) {
+        form.hidden = false;
+        empty.hidden = true;
+        noteTitle.value = ""; noteBody.value = ""; noteCompleted.checked = false; noteRemindAt.value = "";
+        document.getElementById("noteEditorTitle").textContent = "新建便利贴";
+        document.getElementById("noteEditorState").textContent = "未保存";
+      } else if (note) {
+        form.hidden = false;
+        empty.hidden = true;
+        noteTitle.value = note.title || ""; noteBody.value = note.body || ""; noteCompleted.checked = !!note.completed; noteRemindAt.value = note.remind_at ? note.remind_at.slice(0, 16) : "";
+        document.getElementById("noteEditorTitle").textContent = "编辑便利贴";
+        document.getElementById("noteEditorState").textContent = note.completed ? "已完成" : "进行中";
+      } else {
+        form.hidden = true;
+        empty.hidden = false;
+        document.getElementById("noteEditorState").textContent = "未选择";
+      }
+      noteFormDirty = false;
+      setNoteError();
+      updateNoteByteCounts();
+      renderNotes();
+    }
+
+    async function saveNote(event) {
+      event.preventDefault();
+      try {
+        validateNoteForm();
+        const payload = {title: noteTitle.value.trim(), body: noteBody.value, completed: noteCompleted.checked, remind_at: noteRemindAt.value ? new Date(noteRemindAt.value).toISOString() : null, base_version: notesState.version};
+        const result = await fetchJson(selectedNoteId ? `/notes/${selectedNoteId}` : "/notes", {method: selectedNoteId ? "PATCH" : "POST", body: JSON.stringify(payload)});
+        selectedNoteId = result.note?.id || selectedNoteId;
+        noteFormDirty = false;
+        applyNotesSnapshot(result.data);
+        setNoteError();
+      } catch (error) {
+        if (error.status === 409) {
+          document.getElementById("reloadStaleNote").hidden = false;
+          applyNotesSnapshot(error.payload.data, true);
+        }
+        setNoteError(error.message);
+      }
+    }
+
+    async function toggleNote(id) {
+      try {
+        const note = notesState.notes.find((item) => item.id === id);
+        if (!note) return;
+        const result = await fetchJson(`/notes/${id}`, {method: "PATCH", body: JSON.stringify({completed: !note.completed, base_version: notesState.version})});
+        applyNotesSnapshot(result.data, true);
+      } catch (error) { setNoteError(error.message); }
+    }
+
+    async function deleteNote(id = selectedNoteId) {
+      if (!id || !window.confirm("删除这条便利贴？")) return;
+      try {
+        const result = await fetchJson(`/notes/${id}`, {method: "DELETE", body: JSON.stringify({base_version: notesState.version})});
+        selectedNoteId = null;
+        applyNotesSnapshot(result.data);
+        selectNote(null);
+      } catch (error) { setNoteError(error.message); }
+    }
+
+    async function moveNote(id, delta) {
+      const ids = notesState.notes.map((note) => note.id);
+      const from = ids.indexOf(id); const to = from + delta;
+      if (from < 0 || to < 0 || to >= ids.length) return;
+      [ids[from], ids[to]] = [ids[to], ids[from]];
+      try {
+        const result = await fetchJson("/notes/reorder", {method: "PUT", body: JSON.stringify({ids, base_version: notesState.version})});
+        applyNotesSnapshot(result.data, true);
+      } catch (error) { setNoteError(error.message); }
+    }
+
+    function reloadSelectedNote() {
+      noteFormDirty = false;
+      document.getElementById("reloadStaleNote").hidden = true;
+      applyNotesSnapshot(notesState);
+    }
+
     function pretty(value) {
       return JSON.stringify(value || [], null, 2);
     }
@@ -674,6 +1277,36 @@ EDITOR_HTML = r"""<!doctype html>
       }
     }
 
+    function renderRealtime(meeting) {
+      const transcript = meeting.transcript || {};
+      const summary = meeting.summary || {};
+      const audio = transcript.audio || {};
+      if (recordingSessionId && ["recording", "paused", "finalizing", "error"].includes(transcript.status)) setRecordingButtons(transcript.status);
+      const provider = document.getElementById("realtimeProvider");
+      const audioState = document.getElementById("realtimeAudioState");
+      provider.textContent = "状态：" + (transcript.status || "idle") + (summary.final ? " · 已完成" : "");
+      if (transcript.error) {
+        audioState.textContent = "处理失败：" + (transcript.error.message || "未知错误") + "；已保留 " + (audio.accepted_chunks || 0) + " 个已接收片段，可重试。";
+        audioState.classList.add("error");
+      } else if (audio.accepted_chunks) {
+        audioState.textContent = "后台已接收 " + audio.accepted_chunks + " 个音频片段，共 " + (audio.bytes || 0) + " bytes。" + (transcript.segments?.length ? "已生成转写。" : "当前 Demo ASR 未返回文字，请配置真实 ASR 或使用手工纪要。");
+        audioState.classList.remove("error");
+      } else {
+        audioState.textContent = "尚未收到音频片段。";
+        audioState.classList.remove("error");
+      }
+      const segments = transcript.segments || [];
+      document.getElementById("realtimeTranscript").innerHTML = segments.slice(-20).map((item) => "<div class=\"realtimeSegment\"><strong>" + escapeHtml(item.speaker || "未知发言人") + "</strong><span>" + escapeHtml(item.text || "") + "</span></div>").join("") || "<div class=\"hint\">开始录音或发送手工纪要后，这里会显示转写。</div>";
+      const bullets = summary.bullets || [];
+      document.getElementById("realtimeBullets").innerHTML = bullets.map((item) => "<li>" + escapeHtml(item) + "</li>").join("") || "<li class=\"hint\">暂无摘要</li>";
+      const decisions = summary.decisions || [];
+      document.getElementById("realtimeDecisions").innerHTML = decisions.map((item) => "<li>" + escapeHtml(item) + "</li>").join("") || "<li class=\"hint\">暂无决定</li>";
+      const metrics = summary.metrics || [];
+      document.getElementById("realtimeMetrics").innerHTML = metrics.map((item) => "<div class=\"realtimeMetric\"><strong>" + escapeHtml(item.value || "--") + "</strong><span>" + escapeHtml(item.label || "指标") + " · " + escapeHtml(item.delta || "") + "</span></div>").join("") || "<div class=\"hint\">暂无指标</div>";
+      const actions = summary.action_items || [];
+      document.getElementById("realtimeActions").innerHTML = actions.map((item) => "<li>" + escapeHtml(item.task || item.text || item) + (item.owner ? " · " + escapeHtml(item.owner) : "") + "</li>").join("") || "<li class=\"hint\">暂无待办</li>";
+    }
+
     function fillForm(meeting) {
       currentMeeting = meeting || {};
       document.getElementById("meetingId").value = currentMeeting.meeting_id || "";
@@ -688,6 +1321,7 @@ EDITOR_HTML = r"""<!doctype html>
       document.getElementById("reminderEditor").value = pretty(currentMeeting.reminder?.items);
       document.getElementById("keywords").value = (currentMeeting.summary?.keywords || []).join(",");
       updatePreview();
+      renderRealtime(currentMeeting);
     }
 
     function readBaseForm() {
@@ -753,12 +1387,12 @@ EDITOR_HTML = r"""<!doctype html>
       })[char]);
     }
 
-    async function loadMeeting() {
+    async function loadMeeting({quiet = false} = {}) {
       try {
-        setStatus("正在读取会议数据...");
+        if (!quiet) setStatus("正在读取会议数据...");
         const payload = await fetchJson("/meeting/current");
         fillForm(payload.data);
-        setStatus(`已读取：${payload.data.meeting_id || "local-demo"}`);
+        if (!quiet) setStatus("已读取：" + (payload.data.meeting_id || "local-demo"));
       } catch (error) {
         setStatus(error.message, true);
       }
@@ -772,9 +1406,39 @@ EDITOR_HTML = r"""<!doctype html>
           body: JSON.stringify({data: meeting})
         });
         fillForm(payload.data);
+        loadOverview({quiet: true});
         setStatus("基本信息已保存");
       } catch (error) {
         setStatus(error.message, true);
+      }
+    }
+
+    async function checkZectrixIntegration() {
+      const connection = document.getElementById("zectrixConnection");
+      const devices = document.getElementById("zectrixDevices");
+      const list = document.getElementById("zectrixDeviceList");
+      const dot = document.getElementById("zectrixDot");
+      try {
+        const payload = await fetchJson("/api/integrations/zectrix");
+        list.innerHTML = "";
+        dot.className = "cloudDot";
+        if (!payload.configured) {
+          connection.textContent = "未配置";
+          devices.textContent = "未配置云端密钥；可设置 ZECTRIX_API_KEY 或 ZECTRIX_API_KEY_FILE。";
+          dot.classList.add("warn");
+          return payload;
+        }
+        connection.textContent = "已配置";
+        dot.classList.add("online");
+        devices.textContent = "已连接云端 · " + (payload.device_count || 0) + " 台设备";
+        list.innerHTML = (payload.devices || []).map((item) => "<div class=\"cloudDevice\"><strong>" + escapeHtml(item.alias || item.device_id) + "</strong><span>" + escapeHtml(item.device_id) + (item.board ? " · " + escapeHtml(item.board) : "") + "</span></div>").join("") || "<div class=\"hint\">API key 有效，但没有绑定设备。</div>";
+        return payload;
+      } catch (error) {
+        connection.textContent = "连接失败";
+        devices.textContent = error.message;
+        dot.className = "cloudDot error";
+        list.innerHTML = "";
+        throw error;
       }
     }
 
@@ -788,7 +1452,18 @@ EDITOR_HTML = r"""<!doctype html>
           body: JSON.stringify({data: meeting})
         });
         fillForm(payload.data);
-        setStatus("已一键推送全部设备");
+        const delivery = payload.delivery || {};
+        const pushed = (delivery.targets || []).filter((item) => item.status === "pushed").length;
+        const message = delivery.status === "pushed"
+          ? "已推送 " + pushed + " 台设备"
+          : delivery.reason === "api_key_missing"
+            ? "未配置 ZECTRIX_API_KEY；已保存本地群发记录"
+            : delivery.status === "partial"
+              ? "部分设备推送完成，请检查云端状态"
+              : "暂无可推送设备；已记录请求";
+        setStatus(message, delivery.status === "error");
+        loadOverview({quiet: true});
+        checkZectrixIntegration().catch(() => {});
       } catch (error) {
         setStatus(error.message, true);
       }
@@ -854,6 +1529,7 @@ EDITOR_HTML = r"""<!doctype html>
           body: JSON.stringify({segments, keywords})
         });
         fillForm(payload.data);
+        loadOverview({quiet: true});
         setStatus("纪要已发送，摘要已更新");
       } catch (error) {
         setStatus(error.message, true);
@@ -868,10 +1544,16 @@ EDITOR_HTML = r"""<!doctype html>
       });
     });
 
-    ["noteTitle","noteBody","noteCompleted","noteRemindAt"].forEach(id=>document.getElementById(id).addEventListener("input",()=>{noteFormDirty = true;}));
+    ["noteTitle", "noteBody", "noteCompleted", "noteRemindAt"].forEach((id) => document.getElementById(id).addEventListener("input", () => {
+      noteFormDirty = true;
+      updateNoteByteCounts();
+    }));
     setRecordingButtons("idle");
     connectEvents();
     loadMeeting();
+    loadOverview();
+    overviewTimer = window.setInterval(() => loadOverview({quiet: true}), 30000);
+    checkZectrixIntegration().catch(() => {});
   </script>
 </body>
 </html>
@@ -964,11 +1646,15 @@ def summary_from_segments(segments: list[dict], keywords: list[str] | None = Non
 
 
 class MeetingHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
     data_path: Path = DEFAULT_DATA
     file_root: Path = DEFAULT_FILES
     note_store_path: Path = DEFAULT_NOTES
     realtime_manager = None
+    realtime_asr_provider = None
+    zectrix_client = None
     note_store = None
+    _note_store_lock = threading.RLock()
 
     @classmethod
     def reset_realtime_runtime(cls) -> None:
@@ -978,17 +1664,27 @@ class MeetingHandler(BaseHTTPRequestHandler):
     def get_realtime_manager(cls) -> RecordingManager:
         manager = cls.realtime_manager
         if manager is None or manager.store.path != cls.data_path:
-            manager = RecordingManager(VersionedMeetingStore(cls.data_path))
+            manager = RecordingManager(
+                VersionedMeetingStore(cls.data_path),
+                asr=cls.realtime_asr_provider or build_asr_provider(),
+            )
             cls.realtime_manager = manager
         return manager
 
     @classmethod
+    def get_zectrix_client(cls):
+        if cls.zectrix_client is None:
+            cls.zectrix_client = build_zectrix_client()
+        return cls.zectrix_client
+
+    @classmethod
     def get_note_store(cls) -> VersionedNoteStore:
-        store = cls.note_store
-        if store is None or store.path != cls.note_store_path:
-            store = VersionedNoteStore(cls.note_store_path)
-            cls.note_store = store
-        return store
+        with cls._note_store_lock:
+            store = cls.note_store
+            if store is None or store.path != cls.note_store_path:
+                store = VersionedNoteStore(cls.note_store_path)
+                cls.note_store = store
+            return store
 
     def send_json(self, status: int, payload: dict) -> None:
         raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -1024,10 +1720,18 @@ class MeetingHandler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def read_body_json(self) -> dict | None:
-        length = int(self.headers.get("Content-Length", "0"))
         try:
-            payload = json.loads(self.rfile.read(length).decode("utf-8"))
-        except json.JSONDecodeError as exc:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            self.send_json(400, {"ok": False, "error": "invalid_content_length"})
+            return None
+        if length < 0 or length > MAX_JSON_BODY_BYTES:
+            self.send_json(413, {"ok": False, "error": "request_body_too_large"})
+            return None
+        try:
+            raw = self.rfile.read(length)
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             self.send_json(400, {"ok": False, "error": f"invalid_json: {exc}"})
             return None
         if not isinstance(payload, dict):
@@ -1041,11 +1745,90 @@ class MeetingHandler(BaseHTTPRequestHandler):
         return read_json(self.data_path)
 
     def save_current_meeting(self, payload: dict) -> dict:
+        manager = self.get_realtime_manager()
+        before = manager.store.read()
+
         def replace(candidate: dict) -> None:
             candidate.clear()
             candidate.update(payload)
 
-        return self.get_realtime_manager().store.mutate(replace)
+        result = manager.store.mutate(replace)
+        if int(result.get("version", 0)) != int(before.get("version", 0)):
+            manager.broker.publish("meeting", result.get("version", 0), {"data": result})
+        return result
+
+    def zectrix_status(self) -> dict:
+        client = self.get_zectrix_client()
+        base = {
+            "configured": bool(getattr(client, "configured", False)),
+            "credential_source": getattr(client, "credential_source", "injected"),
+            "api_base": getattr(client, "base_url", ""),
+            "auth": "X-API-Key",
+            "reachable": False,
+            "devices": [],
+            "device_count": 0,
+        }
+        if not base["configured"]:
+            return {**base, "reason": "api_key_missing", "checked_at": now_iso()}
+        try:
+            if callable(getattr(client, "check", None)):
+                result = client.check()
+                raw_devices = result.get("devices") if isinstance(result, dict) else []
+                base.update({key: value for key, value in result.items() if key != "devices"})
+            else:
+                raw_devices = client.list_devices()
+                base.update({"reachable": True, "reason": "ok" if raw_devices else "no_devices"})
+        except ZectrixCloudError as error:
+            return {**base, "reason": "zectrix_api_failed", "error": str(error), "checked_at": now_iso()}
+
+        devices = [
+            {
+                "device_id": item.get("deviceId") or item.get("device_id"),
+                "alias": item.get("alias") or item.get("name") or "未命名设备",
+                "board": item.get("board") or "",
+            }
+            for item in (raw_devices or [])
+            if isinstance(item, dict) and (item.get("deviceId") or item.get("device_id"))
+        ]
+        base["devices"] = devices
+        base["device_count"] = len(devices)
+        base["checked_at"] = now_iso()
+        return base
+
+    def overview(self) -> dict:
+        manager = self.get_realtime_manager()
+        meeting = self.current_meeting()
+        notes = self.get_note_store().read()
+        transcript = meeting.get("transcript") if isinstance(meeting.get("transcript"), dict) else {}
+        summary = meeting.get("summary") if isinstance(meeting.get("summary"), dict) else {}
+        fleet = meeting.get("fleet") if isinstance(meeting.get("fleet"), dict) else {}
+        history = fleet.get("history") if isinstance(fleet.get("history"), list) else []
+        return {
+            "server": {
+                "checked_at": now_iso(),
+                "asr_provider": getattr(manager.asr, "name", manager.asr.__class__.__name__),
+                "real_audio_transcription": bool(getattr(manager.asr, "supports_audio", False)),
+            },
+            "meeting": {
+                "meeting_id": meeting.get("meeting_id") or "local-demo",
+                "version": int(meeting.get("version", 0)),
+                "updated_at": meeting.get("updated_at") or "",
+                "update_priority": meeting.get("update_priority") or "normal",
+                "transcript_status": transcript.get("status") or "idle",
+                "summary_updated_at": summary.get("updated_at") or "",
+                "summary_final": bool(summary.get("final", False)),
+            },
+            "notes": {
+                "version": int(notes.get("version", 0)),
+                "count": len(notes.get("notes") or []),
+                "updated_at": notes.get("updated_at") or "",
+            },
+            "zectrix": self.zectrix_status(),
+            "fleet": {
+                "last_push": fleet.get("last_push") if isinstance(fleet.get("last_push"), dict) else None,
+                "history": history[-20:],
+            },
+        }
 
     @staticmethod
     def note_id_from_path(path: str) -> str | None:
@@ -1105,7 +1888,18 @@ class MeetingHandler(BaseHTTPRequestHandler):
             self.send_html(200, EDITOR_HTML)
             return
         if path == "/health":
-            self.send_json(200, {"ok": True})
+            manager = self.get_realtime_manager()
+            self.send_json(200, {
+                "ok": True,
+                "asr_provider": getattr(manager.asr, "name", manager.asr.__class__.__name__),
+                "real_audio_transcription": bool(getattr(manager.asr, "supports_audio", False)),
+            })
+            return
+        if path == "/api/overview":
+            self.send_json(200, {"ok": True, "data": self.overview()})
+            return
+        if path == "/api/integrations/zectrix":
+            self.send_json(200, {"ok": True, **self.zectrix_status()})
             return
         if path == "/notes":
             self.send_json(200, self.get_note_store().read())
@@ -1122,21 +1916,29 @@ class MeetingHandler(BaseHTTPRequestHandler):
             self.send_json(200, {"ok": True, "version": int(state.get("version", 0)), "updated_at": state.get("updated_at", ""), "update_priority": state.get("update_priority", "normal")})
             return
         if path == "/api/events":
-            last_id = int(self.headers.get("Last-Event-ID", "0") or 0)
-            events = self.get_realtime_manager().broker.events_after(last_id)
-            raw = "".join(
-                "id: {}\nevent: {}\ndata: {}\n\n".format(
-                    item["id"], item["event"], json.dumps(item["data"], ensure_ascii=False)
-                )
-                for item in events
-            ).encode("utf-8")
+            try:
+                last_id = int(self.headers.get("Last-Event-ID", "0") or 0)
+            except ValueError:
+                last_id = 0
+            broker = self.get_realtime_manager().broker
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
             self.send_header("Cache-Control", "no-cache")
-            self.send_header("Content-Length", str(len(raw)))
+            self.send_header("Connection", "keep-alive")
+            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
-            self.wfile.write(raw)
-            return
+            try:
+                while True:
+                    events = broker.wait_events_after(last_id, timeout=15.0)
+                    if events:
+                        self.wfile.write(format_sse(events))
+                        self.wfile.flush()
+                        last_id = events[-1]["id"]
+                    else:
+                        self.wfile.write(b": keep-alive\n\n")
+                        self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                return
         if path in ("/meeting/export.json", "/meeting/export.txt"):
             state = self.get_realtime_manager().store.read()
             if path.endswith(".json"):
@@ -1181,8 +1983,15 @@ class MeetingHandler(BaseHTTPRequestHandler):
             payload = self.read_body_json()
             if payload is None:
                 return
-            session, state = manager.create(str(payload.get("meeting_id") or "meeting"), str(payload.get("mime_type") or "audio/webm"))
-            self.send_json(201, {"ok": True, "session_id": session.session_id, "version": state.get("version", 0), "status": session.status})
+            try:
+                session, state = manager.create(
+                    str(payload.get("meeting_id") or "meeting"),
+                    str(payload.get("mime_type") or "audio/webm"),
+                )
+            except ValueError as error:
+                self.send_json(400, {"ok": False, "error": str(error)})
+                return
+            self.send_json(201, {"ok": True, "session_id": session.session_id, "version": state.get("version", 0), "status": session.status, "mime_type": session.mime_type})
             return
         if path.startswith("/api/recordings/"):
             parts = path.strip("/").split("/")
@@ -1195,7 +2004,31 @@ class MeetingHandler(BaseHTTPRequestHandler):
                 return
             try:
                 if action == "chunks":
-                    result = manager.accept_chunk(session_id, int(payload.get("sequence", -1)), b"", payload)
+                    try:
+                        sequence = int(payload.get("sequence", -1))
+                    except (TypeError, ValueError):
+                        self.send_json(400, {"ok": False, "error": "sequence_must_be_integer"})
+                        return
+                    encoded = payload.get("audio_b64")
+                    if encoded is None:
+                        if payload.get("test_text"):
+                            chunk = b""
+                        else:
+                            self.send_json(400, {"ok": False, "error": "audio_b64_required"})
+                            return
+                    elif not isinstance(encoded, str):
+                        self.send_json(400, {"ok": False, "error": "audio_b64_must_be_string"})
+                        return
+                    else:
+                        try:
+                            chunk = base64.b64decode(encoded, validate=True)
+                        except (ValueError, binascii.Error):
+                            self.send_json(400, {"ok": False, "error": "invalid_audio_base64"})
+                            return
+                    if len(chunk) > MAX_AUDIO_CHUNK_BYTES:
+                        self.send_json(413, {"ok": False, "error": "audio_chunk_too_large"})
+                        return
+                    result = manager.accept_chunk(session_id, sequence, chunk, payload)
                     self.send_json(200, {"ok": True, **result})
                 elif action == "pause":
                     state = manager.pause(session_id)
@@ -1210,10 +2043,14 @@ class MeetingHandler(BaseHTTPRequestHandler):
                     self.send_json(404, {"ok": False, "error": "not_found"})
             except SequenceGapError as error:
                 self.send_json(409, {"ok": False, "error": "sequence_gap", "expected_sequence": error.expected})
+            except AsrProviderError as error:
+                state = manager.store.read()
+                self.send_json(503, {"ok": False, "error": "asr_failed", "message": str(error), "retryable": error.retryable, "version": state.get("version", 0)})
             except KeyError:
                 self.send_json(404, {"ok": False, "error": "session_not_found"})
             except (TypeError, ValueError) as error:
-                self.send_json(409, {"ok": False, "error": str(error)})
+                code = 400 if str(error) in {"audio_chunk_empty", "audio_chunk_too_large", "mime_type_mismatch", "meeting_id_mismatch", "unsupported_audio_mime_type"} else 409
+                self.send_json(code, {"ok": False, "error": str(error)})
             return
         if path == "/meeting/current":
             payload = self.read_body_json()
@@ -1228,11 +2065,101 @@ class MeetingHandler(BaseHTTPRequestHandler):
             payload = self.read_body_json()
             if payload is None:
                 return
-            meeting = unwrap_meeting_payload(payload)
+            requested = unwrap_meeting_payload(payload)
+            meeting = self.current_meeting()
+            meeting.update(requested)
             live = meeting.setdefault("live", {})
-            live["remote_update"] = live.get("remote_update") or "母机同步全部设备"
+            push_id = uuid.uuid4().hex
+            live["remote_update"] = "母机同步全部设备"
+            fleet = meeting.setdefault("fleet", {})
+            client = self.get_zectrix_client()
+            targets = []
+            cloud_error = ""
+            push_started = time.monotonic()
+            if getattr(client, "configured", False):
+                try:
+                    devices = client.list_devices()
+                    pages = build_meeting_pages(meeting)
+                    for device in devices:
+                        device_id = str(device.get("deviceId") or device.get("device_id") or "")
+                        if not device_id:
+                            continue
+                        target_started = time.monotonic()
+                        target = {
+                            "device_id": device_id,
+                            "alias": device.get("alias") or "未命名设备",
+                            "status": "pushing",
+                            "pages_pushed": 0,
+                            "attempts": 0,
+                            "pages": [],
+                        }
+                        try:
+                            for page in pages:
+                                page_started = time.monotonic()
+                                try:
+                                    client.push_structured_text(device_id, page["title"], page["body"], page["page_id"])
+                                except ZectrixCloudError as error:
+                                    target["attempts"] += max(1, int(getattr(client, "last_attempts", 1)))
+                                    target["pages"].append({
+                                        "page_id": page["page_id"],
+                                        "status": "error",
+                                        "duration_ms": int((time.monotonic() - page_started) * 1000),
+                                        "error": str(error),
+                                    })
+                                    raise
+                                target["attempts"] += max(1, int(getattr(client, "last_attempts", 1)))
+                                target["pages_pushed"] += 1
+                                target["pages"].append({
+                                    "page_id": page["page_id"],
+                                    "status": "pushed",
+                                    "duration_ms": int((time.monotonic() - page_started) * 1000),
+                                })
+                            target["status"] = "pushed"
+                        except ZectrixCloudError as error:
+                            target["status"] = "error"
+                            target["error"] = str(error)
+                            cloud_error = str(error)
+                        target["duration_ms"] = int((time.monotonic() - target_started) * 1000)
+                        targets.append(target)
+                except ZectrixCloudError as error:
+                    cloud_error = str(error)
+            else:
+                registered = fleet.get("devices") if isinstance(fleet.get("devices"), list) else []
+                targets = [
+                    {
+                        "device_id": str(device.get("device_id") or device.get("id") or "unknown"),
+                        "status": "queued" if device.get("online", False) else "offline",
+                        "pages_pushed": 0,
+                    }
+                    for device in registered
+                    if isinstance(device, dict)
+                ]
+            if cloud_error and not targets:
+                delivery_status = "error"
+                delivery_reason = "zectrix_api_failed"
+            elif getattr(client, "configured", False) and targets and all(item.get("status") == "pushed" for item in targets):
+                delivery_status = "pushed"
+                delivery_reason = "ok"
+            elif getattr(client, "configured", False) and targets:
+                delivery_status = "partial"
+                delivery_reason = "zectrix_api_failed" if cloud_error else "device_push_partial"
+            else:
+                delivery_status = "no_devices"
+                delivery_reason = "api_key_missing" if not getattr(client, "configured", False) else "no_devices"
+            delivery = {
+                "push_id": push_id,
+                "status": delivery_status,
+                "reason": delivery_reason,
+                "requested_at": now_iso(),
+                "duration_ms": int((time.monotonic() - push_started) * 1000),
+                "targets": targets,
+            }
+            fleet["last_push"] = delivery
+            history = fleet.get("history") if isinstance(fleet.get("history"), list) else []
+            fleet["history"] = (history + [delivery])[-20:]
             meeting = self.save_current_meeting(meeting)
-            self.send_json(200, {"ok": True, "data": meeting})
+            manager.broker.publish("fleet", meeting.get("version", 0), {"delivery": delivery})
+            self.send_json(200, {"ok": True, "data": meeting, "delivery": delivery})
             return
 
         if path == "/meeting/agenda":
@@ -1280,28 +2207,12 @@ class MeetingHandler(BaseHTTPRequestHandler):
             if not isinstance(segments, list) or not all(isinstance(item, dict) for item in segments):
                 self.send_json(400, {"ok": False, "error": "segments_must_be_array"})
                 return
-            normalized_segments = [
-                {
-                    "speaker": str(item.get("speaker") or "发言").strip(),
-                    "text": str(item.get("text") or "").strip(),
-                    "time": str(item.get("time") or now_iso()),
-                }
-                for item in segments
-                if str(item.get("text") or "").strip()
-            ]
-            meeting = self.current_meeting()
-            transcript = meeting.setdefault("transcript", {"segments": []})
-            transcript["segments"] = (transcript.get("segments", []) + normalized_segments)[-80:]
-            if isinstance(payload.get("summary"), dict):
-                meeting["summary"] = payload["summary"]
-            else:
-                keywords = payload.get("keywords")
-                meeting["summary"] = summary_from_segments(
-                    transcript["segments"],
-                    keywords if isinstance(keywords, list) else meeting.get("summary", {}).get("keywords", []),
-                )
-            meeting = self.save_current_meeting(meeting)
-            self.send_json(200, {"ok": True, "data": meeting})
+            keywords = payload.get("keywords")
+            if keywords is not None and (not isinstance(keywords, list) or not all(isinstance(item, str) for item in keywords)):
+                self.send_json(400, {"ok": False, "error": "keywords_must_be_array"})
+                return
+            state = manager.append_manual_segments(segments, keywords)
+            self.send_json(200, {"ok": True, "data": state})
             return
 
         if path not in ("/meeting/current", "/fleet/push"):
